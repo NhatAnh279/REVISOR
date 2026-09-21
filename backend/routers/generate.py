@@ -8,8 +8,15 @@ router = APIRouter()
 client = anthropic.Anthropic()
 
 MODEL = "claude-haiku-4-5"
-MIN_QUESTIONS = 10
-MAX_QUESTIONS = 15
+
+DIFFICULTY_GUIDANCE = {
+    "easy": "Focus on recall and definition: use simple language and test basic facts and key "
+    "terms stated explicitly on the slides.",
+    "medium": "Focus on comprehension and application: ask students to explain concepts in "
+    "their own words and apply them to examples.",
+    "hard": "Focus on analysis and evaluation: require students to compare, contrast, "
+    "critique, or synthesize ideas across the lecture.",
+}
 
 SYSTEM_PROMPT = (
     "You are an assistant that creates review questions for students based on the content of "
@@ -32,6 +39,8 @@ class SlideInput(BaseModel):
 
 class LectureInput(BaseModel):
     slides: List[SlideInput]
+    num_questions: int = 10
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 
 class GeneratedQuestion(BaseModel):
@@ -63,7 +72,9 @@ def build_lecture_text(slides: List[SlideInput]) -> str:
     return "\n".join(f"Slide {slide.slide_number}: {slide.text}" for slide in slides)
 
 
-def generate_questions_for_lecture(lecture_text: str) -> List[GeneratedQuestion]:
+def generate_questions_for_lecture(
+    lecture_text: str, num_questions: int, difficulty: str
+) -> List[GeneratedQuestion]:
     response = client.messages.parse(
         model=MODEL,
         max_tokens=4096,
@@ -73,8 +84,8 @@ def generate_questions_for_lecture(lecture_text: str) -> List[GeneratedQuestion]
                 "role": "user",
                 "content": (
                     f'Lecture content:\n"""\n{lecture_text}\n"""\n\n'
-                    f"Create between {MIN_QUESTIONS} and {MAX_QUESTIONS} review questions covering "
-                    "the whole lecture above."
+                    f"Create exactly {num_questions} review questions covering the whole lecture "
+                    f"above. Difficulty level: {difficulty}. {DIFFICULTY_GUIDANCE[difficulty]}"
                 ),
             }
         ],
@@ -88,11 +99,15 @@ async def generate(lecture: LectureInput):
     slides = [slide for slide in lecture.slides if slide.text.strip()]
     if not slides:
         raise HTTPException(status_code=400, detail="Slide list is empty")
+    if not 5 <= lecture.num_questions <= 15:
+        raise HTTPException(status_code=400, detail="num_questions must be between 5 and 15")
 
     lecture_text = build_lecture_text(slides)
 
     try:
-        questions = generate_questions_for_lecture(lecture_text)
+        questions = generate_questions_for_lecture(
+            lecture_text, lecture.num_questions, lecture.difficulty
+        )
     except anthropic.APIError as e:
         raise HTTPException(status_code=502, detail=f"Error calling Claude: {e}")
 
