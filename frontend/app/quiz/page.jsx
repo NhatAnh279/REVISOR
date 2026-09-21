@@ -147,10 +147,12 @@ export default function QuizPage() {
           correct_answer,
           student_answer,
         }));
+      const date = new Date().toISOString();
+
       localStorage.setItem(
         "revisor_results",
         JSON.stringify({
-          date: Date.now(),
+          date,
           score: {
             total: result.total,
             correct: result.correct,
@@ -161,6 +163,25 @@ export default function QuizPage() {
           wrong_questions: wrongQuestions,
         })
       );
+
+      const historyEntry = {
+        date,
+        score: result.correct,
+        total: result.total,
+        score_percent: result.score_percent,
+        weak_topics: result.weak_topics,
+        flagged_questions: flaggedQuestions,
+        wrong_questions: wrongQuestions,
+      };
+      let history = [];
+      try {
+        const stored = JSON.parse(localStorage.getItem("revisor_history") || "[]");
+        if (Array.isArray(stored)) history = stored;
+      } catch {
+        history = [];
+      }
+      history.push(historyEntry);
+      localStorage.setItem("revisor_history", JSON.stringify(history));
 
       router.push("/summary");
     } catch (err) {
@@ -339,7 +360,14 @@ export default function QuizPage() {
                         title={q.question}
                         disabled={busy}
                         onClick={() => goToQuestion(i)}
-                        className={`relative flex size-10 cursor-pointer items-center justify-center rounded-[10px] text-sm font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${stateClasses}`}
+                        className={`relative box-border shrink-0 cursor-pointer rounded-[10px] text-sm leading-none font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${stateClasses}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "40px",
+                          height: "40px",
+                        }}
                       >
                         {i + 1}
                         {isFlaggedQuestion && (

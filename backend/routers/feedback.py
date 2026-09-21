@@ -1,3 +1,6 @@
+import asyncio
+from typing import List, Union
+
 import anthropic
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -36,10 +39,10 @@ class FeedbackResult(BaseModel):
     hint: str
 
 
-@router.post("/feedback", response_model=FeedbackResult)
-async def feedback(request: FeedbackRequest):
+async def _get_feedback(request: FeedbackRequest) -> FeedbackResult:
     try:
-        response = client.messages.parse(
+        response = await asyncio.to_thread(
+            client.messages.parse,
             model=MODEL,
             max_tokens=1024,
             system=SYSTEM_PROMPT,
@@ -61,3 +64,12 @@ async def feedback(request: FeedbackRequest):
         raise HTTPException(status_code=502, detail=f"Error calling Claude: {e}")
 
     return response.parsed_output
+
+
+@router.post("/feedback", response_model=Union[FeedbackResult, List[FeedbackResult]])
+async def feedback(request: Union[List[FeedbackRequest], FeedbackRequest]):
+    if isinstance(request, list):
+        if not request:
+            raise HTTPException(status_code=400, detail="Request list is empty")
+        return await asyncio.gather(*(_get_feedback(r) for r in request))
+    return await _get_feedback(request)
