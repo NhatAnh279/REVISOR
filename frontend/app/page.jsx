@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { CheckCircle2, Loader2, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,23 +21,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
 import { SiteHeader } from "@/components/site-header";
 import { uploadSlides, generateQuiz } from "@/lib/api";
+import { getFileError } from "@/lib/file-validation";
 import {
+  DEFAULT_TOTAL_TIME_MINUTES,
   SOURCE_NAME_KEY,
+  TIMED_MODE_KEY,
   clearCurrentQuiz,
   clearExamContext,
   formatTimeAgo,
   getQuizLabel,
   loadCurrentQuiz,
 } from "@/lib/resume-quiz";
-
-const ACCEPTED_EXTENSIONS = [".pdf", ".pptx"];
-
-function isAcceptedFile(file) {
-  const name = file.name.toLowerCase();
-  return ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext));
-}
 
 export default function UploadPage() {
   const router = useRouter();
@@ -45,6 +44,8 @@ export default function UploadPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [numQuestions, setNumQuestions] = useState("10");
   const [difficulty, setDifficulty] = useState("medium");
+  const [timedMode, setTimedMode] = useState(false);
+  const [totalTimeMinutes, setTotalTimeMinutes] = useState(String(DEFAULT_TOTAL_TIME_MINUTES));
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState("");
   const [error, setError] = useState("");
@@ -61,8 +62,9 @@ export default function UploadPage() {
 
   function handleFileSelected(selected) {
     if (!selected) return;
-    if (!isAcceptedFile(selected)) {
-      setError("Only PDF and PPTX files are supported.");
+    const fileError = getFileError(selected);
+    if (fileError) {
+      toast.error(fileError);
       return;
     }
     setError("");
@@ -72,8 +74,11 @@ export default function UploadPage() {
   function handleDrop(e) {
     e.preventDefault();
     setIsDragging(false);
-    const dropped = e.dataTransfer.files?.[0];
-    handleFileSelected(dropped);
+    const dropped = e.dataTransfer.files;
+    if (dropped && dropped.length > 1) {
+      toast.warning("Multiple files dropped — only the first one was used.");
+    }
+    handleFileSelected(dropped?.[0]);
   }
 
   async function handleGenerate() {
@@ -87,6 +92,7 @@ export default function UploadPage() {
       if (!slides || slides.length === 0) {
         throw new Error("No readable text found in this file.");
       }
+      toast.success("Lecture uploaded ✓");
 
       setLoadingStep("Generating questions...");
       const { questions } = await generateQuiz(slides, {
@@ -96,6 +102,13 @@ export default function UploadPage() {
 
       localStorage.setItem("revisor_questions", JSON.stringify(questions));
       localStorage.setItem(SOURCE_NAME_KEY, file.name);
+      localStorage.setItem(
+        TIMED_MODE_KEY,
+        JSON.stringify({
+          timedMode,
+          totalTimeMinutes: Number(totalTimeMinutes) || DEFAULT_TOTAL_TIME_MINUTES,
+        })
+      );
       localStorage.removeItem("revisor_answers");
       localStorage.removeItem("revisor_result");
       clearCurrentQuiz();
@@ -103,7 +116,12 @@ export default function UploadPage() {
 
       router.push("/quiz");
     } catch (err) {
-      setError(err.message || "Something went wrong. Please try again.");
+      const message = err.message || "Something went wrong. Please try again.";
+      setError(message);
+      toast.error(message);
+      // Reset the upload state so the user starts a clean attempt.
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = "";
       setLoading(false);
       setLoadingStep("");
     }
@@ -162,16 +180,14 @@ export default function UploadPage() {
                 onDrop={handleDrop}
                 className={`flex w-full flex-col items-center justify-center gap-3 rounded-[16px] border-2 border-dashed px-6 py-12 text-center transition-colors ${
                   isDragging
-                    ? "border-primary bg-accent"
+                    ? "border-primary-dark bg-primary/10"
                     : "border-border hover:border-primary hover:bg-accent/40"
                 }`}
               >
                 <span
-                  className={`flex size-12 items-center justify-center rounded-full ${
-                    file
-                      ? "bg-success/10 text-success"
-                      : "bg-accent text-primary"
-                  }`}
+                  className={`flex size-12 items-center justify-center rounded-full transition-transform ${
+                    isDragging ? "scale-110" : ""
+                  } ${file ? "bg-success/10 text-success" : "bg-accent text-primary"}`}
                 >
                   {file ? (
                     <CheckCircle2 className="size-6" />
@@ -183,7 +199,8 @@ export default function UploadPage() {
                   {file ? "File selected" : "Drop your lecture slides here"}
                 </span>
                 {file ? (
-                  <Badge className="max-w-full gap-1.5 bg-accent text-primary">
+                  <Badge className="max-w-full gap-1.5 bg-success/10 text-success">
+                    <CheckCircle2 className="size-3.5 shrink-0" />
                     <span className="truncate">{file.name}</span>
                   </Badge>
                 ) : (
@@ -200,7 +217,7 @@ export default function UploadPage() {
                 onChange={(e) => handleFileSelected(e.target.files?.[0])}
               />
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="num-questions">Questions</Label>
                   <Select value={numQuestions} onValueChange={setNumQuestions}>
@@ -227,6 +244,33 @@ export default function UploadPage() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              <div className="space-y-3 rounded-[12px] border-2 border-border p-3.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="timed-mode" className="text-sm font-semibold">
+                      Timed Mode
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Race a single countdown for the whole quiz.
+                    </p>
+                  </div>
+                  <Switch id="timed-mode" checked={timedMode} onCheckedChange={setTimedMode} />
+                </div>
+                {timedMode && (
+                  <div className="space-y-1.5 animate-fade-in">
+                    <Label htmlFor="total-time">Total time (minutes)</Label>
+                    <Input
+                      id="total-time"
+                      type="number"
+                      min="1"
+                      max="180"
+                      value={totalTimeMinutes}
+                      onChange={(e) => setTotalTimeMinutes(e.target.value)}
+                    />
+                  </div>
+                )}
               </div>
 
               {error && <p className="text-sm text-destructive">{error}</p>}

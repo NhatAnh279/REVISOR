@@ -1,6 +1,8 @@
 export const CURRENT_QUIZ_KEY = "revisor_current_quiz";
 export const SOURCE_NAME_KEY = "revisor_source_name";
 export const EXAM_CONTEXT_KEY = "revisor_exam_context";
+export const TIMED_MODE_KEY = "revisor_timed_mode";
+export const DEFAULT_TOTAL_TIME_MINUTES = 30;
 
 export function loadCurrentQuiz() {
   if (typeof window === "undefined") return null;
@@ -43,6 +45,35 @@ export function loadExamContext() {
 export function clearExamContext() {
   if (typeof window === "undefined") return;
   localStorage.removeItem(EXAM_CONTEXT_KEY);
+}
+
+// { timedMode, totalTimeMinutes } set by the upload page right before a quiz
+// starts — one countdown for the whole quiz/exam, not per question. Any flow
+// that never sets it (e.g. Create Exam) is untimed by default.
+export function loadTimedModeSettings() {
+  if (typeof window === "undefined") {
+    return { timedMode: false, totalTimeMinutes: DEFAULT_TOTAL_TIME_MINUTES };
+  }
+  try {
+    const stored = JSON.parse(localStorage.getItem(TIMED_MODE_KEY) || "null");
+    if (!stored || typeof stored !== "object") {
+      return { timedMode: false, totalTimeMinutes: DEFAULT_TOTAL_TIME_MINUTES };
+    }
+    return {
+      timedMode: Boolean(stored.timedMode),
+      totalTimeMinutes:
+        Number.isFinite(stored.totalTimeMinutes) && stored.totalTimeMinutes > 0
+          ? stored.totalTimeMinutes
+          : DEFAULT_TOTAL_TIME_MINUTES,
+    };
+  } catch {
+    return { timedMode: false, totalTimeMinutes: DEFAULT_TOTAL_TIME_MINUTES };
+  }
+}
+
+export function clearTimedModeSettings() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(TIMED_MODE_KEY);
 }
 
 export function getQuizLabel(currentQuiz) {

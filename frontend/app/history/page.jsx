@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Flag, Loader2, TrendingUp, XCircle } from "lucide-react";
+import { toast } from "sonner";
+import { ChevronDown, Flag, TrendingUp, XCircle } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -20,6 +21,7 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SiteHeader } from "@/components/site-header";
 import { supabase } from "@/lib/supabase";
 import {
@@ -28,6 +30,32 @@ import {
   getQuizLabel,
   loadCurrentQuiz,
 } from "@/lib/resume-quiz";
+
+function HistorySkeleton() {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardContent className="space-y-3">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-64 w-full" />
+        </CardContent>
+      </Card>
+      <div className="space-y-3">
+        {[0, 1, 2].map((i) => (
+          <Card key={i} size="sm">
+            <CardContent className="flex items-center justify-between gap-4">
+              <div className="space-y-2">
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+              <Skeleton className="h-6 w-12 rounded-full" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 // Rows come back as { date, score, total, score_percent, weak_topics,
 // questions: { flagged_questions, wrong_questions } }; flatten the jsonb
@@ -109,7 +137,8 @@ export default function HistoryPage() {
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) {
-          setHistoryError(error.message);
+          setHistoryError("Could not load history, please refresh");
+          toast.error("Could not load history, please refresh");
         } else {
           setHistory((data || []).map(normalizeHistoryRow));
         }
@@ -157,26 +186,19 @@ export default function HistoryPage() {
           </div>
 
           {loadingHistory ? (
-            <div className="flex items-center justify-center gap-2 py-14 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading your history...
-            </div>
+            <HistorySkeleton />
           ) : historyError ? (
             <p className="text-sm text-destructive">{historyError}</p>
           ) : history.length === 0 && !currentQuiz ? (
             <Card>
               <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-                <span className="flex size-12 items-center justify-center rounded-full bg-accent text-primary">
-                  <TrendingUp className="size-6" />
-                </span>
-                <p className="text-sm font-semibold text-foreground">
-                  No quizzes yet
-                </p>
+                <span className="text-4xl">📚</span>
+                <p className="text-sm font-semibold text-foreground">No quizzes yet</p>
                 <p className="max-w-xs text-xs text-muted-foreground">
-                  Finish a quiz and your results will show up here.
+                  Upload a lecture to get started
                 </p>
                 <Button size="sm" onClick={() => router.push("/")}>
-                  Start a quiz
+                  New Quiz
                 </Button>
               </CardContent>
             </Card>
@@ -260,9 +282,9 @@ export default function HistoryPage() {
               <div className="space-y-3">
                 {currentQuiz && (
                   <Card size="sm" className="border-flag">
-                    <CardContent className="flex items-center justify-between gap-4">
+                    <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <p className="text-sm font-bold text-foreground">
                             {getQuizLabel(currentQuiz)}
                           </p>
@@ -281,7 +303,7 @@ export default function HistoryPage() {
                           answered — started {formatTimeAgo(currentQuiz.startedAt)}
                         </p>
                       </div>
-                      <Button size="sm" onClick={() => router.push("/quiz")}>
+                      <Button size="sm" className="w-full sm:w-auto" onClick={() => router.push("/quiz")}>
                         Continue
                       </Button>
                     </CardContent>

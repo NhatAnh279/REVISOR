@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -26,13 +27,7 @@ import {
 import { SiteHeader } from "@/components/site-header";
 import { supabase } from "@/lib/supabase";
 import { uploadSlides } from "@/lib/api";
-
-const ACCEPTED_EXTENSIONS = [".pdf", ".pptx"];
-
-function isAcceptedFile(file) {
-  const name = file.name.toLowerCase();
-  return ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext));
-}
+import { getFileError } from "@/lib/file-validation";
 
 // exams come back with num_questions/difficulty from the exams table; the
 // most recent quiz_history row for that exam_id (if any) supplies the score.
@@ -134,8 +129,9 @@ export default function SubjectDetailPage() {
 
   function handleFileSelected(selected) {
     if (!selected) return;
-    if (!isAcceptedFile(selected)) {
-      setUploadError("Only PDF and PPTX files are supported.");
+    const fileError = getFileError(selected);
+    if (fileError) {
+      setUploadError(fileError);
       return;
     }
     setUploadError("");
@@ -148,7 +144,11 @@ export default function SubjectDetailPage() {
   function handleDrop(e) {
     e.preventDefault();
     setIsDragging(false);
-    handleFileSelected(e.dataTransfer.files?.[0]);
+    const dropped = e.dataTransfer.files;
+    if (dropped && dropped.length > 1) {
+      toast.warning("Multiple files dropped — only the first one was used.");
+    }
+    handleFileSelected(dropped?.[0]);
   }
 
   async function handleUploadLecture(e) {
@@ -186,7 +186,10 @@ export default function SubjectDetailPage() {
       setUploadOpen(false);
       loadSubject();
     } catch (err) {
-      setUploadError(err.message || "Could not upload this lecture.");
+      // Show the specific backend/Supabase error, not a generic message.
+      const message = err.message || "Could not upload this lecture.";
+      setUploadError(message);
+      toast.error(message);
     } finally {
       setUploading(false);
       setUploadStep("");

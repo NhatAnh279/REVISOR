@@ -22,7 +22,7 @@ class SummaryResult(BaseModel):
 @router.post("/summary", response_model=SummaryResult)
 async def summary(records: List[AnswerRecord]):
     if not records:
-        raise HTTPException(status_code=400, detail="Answer list is empty")
+        raise HTTPException(status_code=400, detail="No quiz results provided")
 
     total = len(records)
     correct = sum(1 for r in records if r.is_correct)

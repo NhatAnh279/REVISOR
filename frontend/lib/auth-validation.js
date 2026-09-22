@@ -11,6 +11,13 @@ export function getPasswordError(password) {
 // Maps raw Supabase Auth error messages to the copy this app shows.
 export function mapAuthError(message) {
   const lower = (message || "").toLowerCase();
+  if (
+    lower.includes("failed to fetch") ||
+    lower.includes("network") ||
+    lower.includes("load failed")
+  ) {
+    return "Connection error, please try again";
+  }
   if (lower.includes("invalid login credentials")) {
     return "Invalid email or password";
   }

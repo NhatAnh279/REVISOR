@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,12 +19,27 @@ import { supabase } from "@/lib/supabase";
 import { mapAuthError } from "@/lib/auth-validation";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("reason") === "session_expired") {
+      toast.error("Session expired, please login to continue");
+    }
+  }, [searchParams]);
 
   function clearFieldError(field) {
     setFormError("");
@@ -48,7 +64,10 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/");
+    const redirectedFrom = searchParams.get("redirectedFrom");
+    // Only follow same-origin relative paths — never an absolute/external URL.
+    const isSafeRedirect = redirectedFrom?.startsWith("/") && !redirectedFrom.startsWith("//");
+    router.push(isSafeRedirect ? redirectedFrom : "/");
   }
 
   return (

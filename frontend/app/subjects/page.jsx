@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, Loader2, Plus } from "lucide-react";
+import { toast } from "sonner";
+import { Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
@@ -29,6 +31,28 @@ const SUBJECT_COLORS = [
   "#FACC15",
   "#14B8A6",
 ];
+
+function SubjectsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {[0, 1, 2].map((i) => (
+        <Card key={i}>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <Skeleton className="size-3.5 shrink-0 rounded-full" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+            <div className="flex gap-1.5">
+              <Skeleton className="h-5 w-20 rounded-full" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+            </div>
+            <Skeleton className="h-9 w-full" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
 
 function countBySubject(rows) {
   const counts = {};
@@ -122,9 +146,10 @@ export default function SubjectsPage() {
     setSaving(false);
 
     if (insertError) {
-      setNameError(insertError.message);
+      toast.error("Could not create subject, please try again");
       return;
     }
+    toast.success("Subject created successfully ✓");
     setDialogOpen(false);
     loadSubjects();
   }
@@ -153,24 +178,18 @@ export default function SubjectsPage() {
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center gap-2 py-14 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Loading your subjects...
-            </div>
+            <SubjectsSkeleton />
           ) : error ? (
             <p className="text-sm text-destructive">{error}</p>
           ) : !hasSubjects ? (
             <Card>
               <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
-                <span className="flex size-12 items-center justify-center rounded-full bg-accent text-primary">
-                  <BookOpen className="size-6" />
-                </span>
+                <span className="text-4xl">🎓</span>
                 <p className="text-sm font-semibold text-foreground">
                   No subjects yet
                 </p>
                 <p className="max-w-xs text-xs text-muted-foreground">
-                  Create a subject to organize lectures and build exams from
-                  them.
+                  Create your first subject
                 </p>
                 <Button size="sm" onClick={openDialog}>
                   <Plus className="size-4" />

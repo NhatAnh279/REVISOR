@@ -124,19 +124,19 @@
   @keyframes fade-in {
     from {
       opacity: 0;
-      transform: translateY(4px);
     }
     to {
       opacity: 1;
-      transform: translateY(0);
     }
   }
   @keyframes flash-correct {
     0% {
       background-color: color-mix(in oklch, var(--success), transparent 80%);
+      transform: scale(1.02);
     }
     100% {
       background-color: transparent;
+      transform: scale(1);
     }
   }
   @keyframes shake {
@@ -160,7 +160,10 @@
   }
 
   .animate-fade-in {
-    animation: fade-in 0.35s ease-out both;
+    animation: fade-in 0.2s ease-out both;
+  }
+  .animate-fade-in-slow {
+    animation: fade-in 0.3s ease-out both;
   }
   .animate-flash-correct {
     animation: flash-correct 0.7s ease-out both;

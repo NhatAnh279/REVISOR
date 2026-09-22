@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, History, Home } from "lucide-react";
+import { BookOpen, History, Home, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 
@@ -56,17 +56,38 @@ function UserMenu() {
 
 export function SiteHeader({ right }) {
   const pathname = usePathname();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [prevPathname, setPrevPathname] = useState(pathname);
+
+  // Close the mobile nav on navigation. Setting state during render (guarded
+  // by the prevPathname comparison) instead of in an effect, per React's
+  // "adjusting state when a prop changes" pattern.
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
+    setMobileNavOpen(false);
+  }
 
   return (
-    <header className="w-full border-b-2 border-border bg-background">
+    <header className="relative w-full border-b-2 border-border bg-background">
       <div className="flex w-full items-center justify-between gap-4 px-6 py-4">
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-3 md:gap-6">
           <Link href="/">
             <span className="text-2xl font-extrabold tracking-wide text-primary">
               REVISOR
             </span>
           </Link>
-          <nav className="flex items-center gap-1">
+
+          <button
+            type="button"
+            aria-label={mobileNavOpen ? "Close menu" : "Open menu"}
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen((prev) => !prev)}
+            className="flex size-9 items-center justify-center rounded-[10px] text-foreground hover:bg-accent/50 md:hidden"
+          >
+            {mobileNavOpen ? <X className="size-5" /> : <Menu className="size-5" />}
+          </button>
+
+          <nav className="hidden items-center gap-1 md:flex">
             {NAV_LINKS.map(({ href, label, icon: Icon }) => {
               const isActive =
                 href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -81,7 +102,7 @@ export function SiteHeader({ right }) {
                   }`}
                 >
                   <Icon className="size-4" />
-                  <span className="hidden sm:inline">{label}</span>
+                  <span>{label}</span>
                 </Link>
               );
             })}
@@ -92,6 +113,29 @@ export function SiteHeader({ right }) {
           <UserMenu />
         </div>
       </div>
+
+      {mobileNavOpen && (
+        <nav className="absolute inset-x-0 top-full z-20 flex flex-col gap-1 border-b-2 border-border bg-background p-2 shadow-md md:hidden">
+          {NAV_LINKS.map(({ href, label, icon: Icon }) => {
+            const isActive =
+              href === "/" ? pathname === "/" : pathname.startsWith(href);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={`flex items-center gap-2.5 rounded-[10px] px-3 py-2.5 text-sm font-semibold transition-colors ${
+                  isActive
+                    ? "bg-accent text-primary"
+                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                }`}
+              >
+                <Icon className="size-4" />
+                {label}
+              </Link>
+            );
+          })}
+        </nav>
+      )}
     </header>
   );
 }

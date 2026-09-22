@@ -6,6 +6,9 @@ import os
 
 router = APIRouter()
 
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+
+
 def extract_pdf(file_path: str):
     slides = []
     with pdfplumber.open(file_path) as pdf:
@@ -30,10 +33,14 @@ def extract_pptx(file_path: str):
 async def upload_file(file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in [".pdf", ".pptx"]:
-        raise HTTPException(status_code=400, detail="Only PDF and PPTX are supported")
+        raise HTTPException(status_code=400, detail="Only PDF and PPTX supported")
+
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File too large (max 20MB)")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(await file.read())
+        tmp.write(content)
         tmp_path = tmp.name
 
     try:
@@ -41,7 +48,12 @@ async def upload_file(file: UploadFile = File(...)):
             slides = extract_pdf(tmp_path)
         else:
             slides = extract_pptx(tmp_path)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not read file, please try again")
     finally:
         os.unlink(tmp_path)
+
+    if not slides:
+        raise HTTPException(status_code=422, detail="No readable text found in slides")
 
     return {"total_slides": len(slides), "slides": slides}

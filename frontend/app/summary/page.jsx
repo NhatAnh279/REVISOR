@@ -2,14 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Download, Loader2, RotateCcw } from "lucide-react";
+import { toast } from "sonner";
+import confetti from "canvas-confetti";
+import { Clock, Download, Loader2, RotateCcw } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SiteHeader } from "@/components/site-header";
 import { getFeedbackBatch } from "@/lib/api";
-import { clearCurrentQuiz, clearExamContext } from "@/lib/resume-quiz";
+import { clearCurrentQuiz, clearExamContext, clearTimedModeSettings } from "@/lib/resume-quiz";
+import { UNICODE_FONT_BASE64 } from "@/lib/pdf-font";
 
 function loadStoredResults() {
   if (typeof window === "undefined") return null;
@@ -31,6 +34,13 @@ function loadStoredTopics() {
   } catch {
     return [];
   }
+}
+
+function formatTime(seconds) {
+  const clamped = Math.max(0, Math.round(seconds));
+  const m = Math.floor(clamped / 60);
+  const s = clamped % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function getScoreMessage(percent) {
@@ -79,18 +89,23 @@ const PDF_COLORS = {
 // Measures wrapped text at a given font/size using jsPDF's own line-height
 // factor, so the box height computed here always matches what doc.text()
 // actually renders (no drift between measuring and drawing).
-function prepareText(doc, text, { font = "normal", size = 11, color = PDF_COLORS.black } = {}, maxWidth) {
-  doc.setFont("helvetica", font);
+function prepareText(
+  doc,
+  text,
+  { font = "normal", family = "helvetica", size = 11, color = PDF_COLORS.black } = {},
+  maxWidth
+) {
+  doc.setFont(family, font);
   doc.setFontSize(size);
   const lines = doc.splitTextToSize(text, maxWidth);
   const lineHeight = (size * doc.getLineHeightFactor() * 25.4) / 72; // pt -> mm
-  return { lines, font, size, color, lineHeight, height: lines.length * lineHeight };
+  return { lines, font, family, size, color, lineHeight, height: lines.length * lineHeight };
 }
 
 // Draws a previously-measured block starting at the given baseline `y`,
 // returning the baseline `y` just past its last line.
 function renderText(doc, prepared, x, y) {
-  doc.setFont("helvetica", prepared.font);
+  doc.setFont(prepared.family, prepared.font);
   doc.setFontSize(prepared.size);
   doc.setTextColor(...prepared.color);
   doc.text(prepared.lines, x, y);
@@ -99,6 +114,11 @@ function renderText(doc, prepared, x, y) {
 
 function buildResultsPdf(results, wrongReview) {
   const doc = new jsPDF();
+  // helvetica (jsPDF's default) only supports WinAnsi encoding, so a
+  // student-typed answer containing Vietnamese diacritics silently drops
+  // those characters. Register a Unicode-capable font for that one field.
+  doc.addFileToVFS("Geist-Regular.ttf", UNICODE_FONT_BASE64);
+  doc.addFont("Geist-Regular.ttf", "Geist", "normal");
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const marginX = 16;
@@ -133,7 +153,14 @@ function buildResultsPdf(results, wrongReview) {
     const question = prepareText(doc, questionText, { font: "bold", size: 11.5 }, innerWidth);
     const details = detailLines
       .filter((d) => d.text)
-      .map((d) => prepareText(doc, d.text, { size: 10.5, font: d.font || "normal", color: d.color }, innerWidth));
+      .map((d) =>
+        prepareText(
+          doc,
+          d.text,
+          { size: 10.5, font: d.font || "normal", family: d.family || "helvetica", color: d.color },
+          innerWidth
+        )
+      );
 
     const boxHeight =
       boxPaddingY * 2 +
@@ -186,7 +213,7 @@ function buildResultsPdf(results, wrongReview) {
     sectionHeading("Wrong Answers");
     wrongReview.forEach((item, index) => {
       drawBox(`${index + 1}. ${item.question}`, [
-        { text: `Your answer: ${item.student_answer}`, color: PDF_COLORS.red },
+        { text: `Your answer: ${item.student_answer}`, color: PDF_COLORS.red, family: "Geist" },
         { text: `Correct answer: ${item.correct_answer}`, color: PDF_COLORS.green },
         item.hint && {
           text: `\u{1F4A1} Hint: ${item.hint}`,
@@ -218,13 +245,19 @@ export default function SummaryPage() {
   const [loadingHints, setLoadingHints] = useState(
     () => (results?.wrong_questions?.length || 0) > 0
   );
-  const [hintsError, setHintsError] = useState("");
 
   useEffect(() => {
     if (!results) {
+      toast.error("No quiz data found");
       router.replace("/");
     }
   }, [results, router]);
+
+  useEffect(() => {
+    if ((results?.score?.score_percent || 0) >= 80) {
+      confetti({ particleCount: 150, spread: 80, origin: { y: 0.3 } });
+    }
+  }, [results]);
 
   useEffect(() => {
     if (!results?.wrong_questions?.length) return;
@@ -246,9 +279,12 @@ export default function SummaryPage() {
           }))
         );
       })
-      .catch((err) => {
+      .catch(() => {
         if (cancelled) return;
-        setHintsError(err.message || "Could not load Socratic hints.");
+        // Hints unavailable — still show each wrong answer's correct
+        // answer, just without the AI-generated hint.
+        toast.error("Could not load hints — showing correct answers only");
+        setWrongReview(results.wrong_questions.map((w) => ({ ...w, hint: "" })));
       })
       .finally(() => {
         if (!cancelled) setLoadingHints(false);
@@ -264,11 +300,17 @@ export default function SummaryPage() {
     localStorage.removeItem("revisor_results");
     clearCurrentQuiz();
     clearExamContext();
+    clearTimedModeSettings();
     router.push("/");
   }
 
   function handleDownload() {
-    buildResultsPdf(results, wrongReview);
+    try {
+      buildResultsPdf(results, wrongReview);
+      toast.success("PDF downloaded ✓");
+    } catch {
+      toast.error("Could not generate PDF, please try again");
+    }
   }
 
   if (!results) return null;
@@ -297,6 +339,14 @@ export default function SummaryPage() {
               <p className="text-base font-bold text-white">
                 {getScoreMessage(results.score.score_percent)}
               </p>
+              {typeof results.time_spent_seconds === "number" &&
+                typeof results.total_time_minutes === "number" && (
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-white/80">
+                    <Clock className="size-4" />
+                    Completed in {formatTime(results.time_spent_seconds)} / Total time{" "}
+                    {results.total_time_minutes}:00
+                  </p>
+                )}
             </CardContent>
           </Card>
 
@@ -348,8 +398,6 @@ export default function SummaryPage() {
                     <Loader2 className="size-4 animate-spin" />
                     Generating Socratic hints...
                   </div>
-                ) : hintsError ? (
-                  <p className="text-sm text-destructive">{hintsError}</p>
                 ) : (
                   wrongReview.map((item, i) => (
                     <div key={i} className="space-y-1.5 rounded-[12px] border-2 border-border p-4">

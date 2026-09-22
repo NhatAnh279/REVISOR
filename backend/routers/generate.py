@@ -2,7 +2,7 @@ from typing import List, Literal, Optional
 
 import anthropic
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 router = APIRouter()
 client = anthropic.Anthropic()
@@ -98,7 +98,7 @@ def generate_questions_for_lecture(
 async def generate(lecture: LectureInput):
     slides = [slide for slide in lecture.slides if slide.text.strip()]
     if not slides:
-        raise HTTPException(status_code=400, detail="Slide list is empty")
+        raise HTTPException(status_code=400, detail="No slide content provided")
     if not 5 <= lecture.num_questions <= 30:
         raise HTTPException(status_code=400, detail="num_questions must be between 5 and 30")
 
@@ -108,8 +108,15 @@ async def generate(lecture: LectureInput):
         questions = generate_questions_for_lecture(
             lecture_text, lecture.num_questions, lecture.difficulty
         )
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Error calling Claude: {e}")
+    except anthropic.RateLimitError:
+        raise HTTPException(status_code=429, detail="Too many requests, please wait a moment")
+    except anthropic.APIConnectionError:
+        # Covers anthropic.APITimeoutError, a subclass of APIConnectionError.
+        raise HTTPException(status_code=503, detail="AI service unavailable, please try again")
+    except ValidationError:
+        raise HTTPException(status_code=500, detail="Failed to parse AI response")
+    except anthropic.APIError:
+        raise HTTPException(status_code=503, detail="AI service unavailable, please try again")
 
     questions_out = [
         QuestionOut(id=f"q{i + 1}", **q.model_dump()) for i, q in enumerate(questions)

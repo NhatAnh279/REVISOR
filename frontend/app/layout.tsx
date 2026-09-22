@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,7 +14,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "REVISOR",
+  title: {
+    default: "New Quiz | REVISOR",
+    template: "%s | REVISOR",
+  },
   description: "AI-generated review quizzes from your lecture slides",
 };
 
@@ -25,6 +29,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
         {children}
+        <Toaster
+          position="top-right"
+          richColors
+          closeButton
+          toastOptions={{ classNames: { toast: "rounded-[12px]! border-2! font-sans!" } }}
+        />
       </body>
     </html>
   );

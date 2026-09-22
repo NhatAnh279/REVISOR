@@ -1,5 +1,5 @@
 import asyncio
-from typing import List, Union
+from typing import List, Optional, Union
 
 import anthropic
 from fastapi import APIRouter, HTTPException
@@ -29,9 +29,9 @@ SYSTEM_PROMPT = (
 
 
 class FeedbackRequest(BaseModel):
-    question: str
-    correct_answer: str
-    student_answer: str
+    question: Optional[str] = None
+    correct_answer: Optional[str] = None
+    student_answer: Optional[str] = None
 
 
 class FeedbackResult(BaseModel):
@@ -40,6 +40,12 @@ class FeedbackResult(BaseModel):
 
 
 async def _get_feedback(request: FeedbackRequest) -> FeedbackResult:
+    if not request.question or not request.correct_answer or not request.student_answer:
+        raise HTTPException(
+            status_code=422,
+            detail="question, correct_answer and student_answer are required",
+        )
+
     try:
         response = await asyncio.to_thread(
             client.messages.parse,
@@ -60,8 +66,8 @@ async def _get_feedback(request: FeedbackRequest) -> FeedbackResult:
             ],
             output_format=FeedbackResult,
         )
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Error calling Claude: {e}")
+    except anthropic.APIError:
+        raise HTTPException(status_code=503, detail="AI service unavailable")
 
     return response.parsed_output
 

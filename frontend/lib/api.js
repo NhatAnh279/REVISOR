@@ -9,22 +9,35 @@ async function parseErrorDetail(response) {
   }
 }
 
-export async function uploadSlides(file) {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const response = await fetch(`${API_BASE}/upload`, {
-    method: "POST",
-    body: formData,
-  });
+// Every API call funnels through here so a dropped connection always
+// produces the same clear message instead of a raw "Failed to fetch".
+async function request(url, options) {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      throw new Error("No internet connection, please check your network");
+    }
+    throw new Error("Could not connect to the server, please try again");
+  }
   if (!response.ok) {
     throw new Error(await parseErrorDetail(response));
   }
   return response.json();
 }
 
+export async function uploadSlides(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request(`${API_BASE}/upload`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
 export async function generateQuiz(slides, { numQuestions, difficulty } = {}) {
-  const response = await fetch(`${API_BASE}/generate`, {
+  return request(`${API_BASE}/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -33,44 +46,28 @@ export async function generateQuiz(slides, { numQuestions, difficulty } = {}) {
       difficulty,
     }),
   });
-  if (!response.ok) {
-    throw new Error(await parseErrorDetail(response));
-  }
-  return response.json();
 }
 
 export async function getFeedback({ question, correct_answer, student_answer }) {
-  const response = await fetch(`${API_BASE}/feedback`, {
+  return request(`${API_BASE}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, correct_answer, student_answer }),
   });
-  if (!response.ok) {
-    throw new Error(await parseErrorDetail(response));
-  }
-  return response.json();
 }
 
 export async function getFeedbackBatch(records) {
-  const response = await fetch(`${API_BASE}/feedback`, {
+  return request(`${API_BASE}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(records),
   });
-  if (!response.ok) {
-    throw new Error(await parseErrorDetail(response));
-  }
-  return response.json();
 }
 
 export async function getSummary(records) {
-  const response = await fetch(`${API_BASE}/summary`, {
+  return request(`${API_BASE}/summary`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(records),
   });
-  if (!response.ok) {
-    throw new Error(await parseErrorDetail(response));
-  }
-  return response.json();
 }

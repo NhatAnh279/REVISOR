@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -26,8 +27,10 @@ import { SiteHeader } from "@/components/site-header";
 import { supabase } from "@/lib/supabase";
 import { generateQuiz } from "@/lib/api";
 import {
+  DEFAULT_TOTAL_TIME_MINUTES,
   EXAM_CONTEXT_KEY,
   SOURCE_NAME_KEY,
+  TIMED_MODE_KEY,
   clearCurrentQuiz,
 } from "@/lib/resume-quiz";
 
@@ -59,6 +62,8 @@ export default function CreateExamPage() {
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [numQuestions, setNumQuestions] = useState(20);
   const [difficulty, setDifficulty] = useState("medium");
+  const [timedMode, setTimedMode] = useState(false);
+  const [totalTimeMinutes, setTotalTimeMinutes] = useState(String(DEFAULT_TOTAL_TIME_MINUTES));
   const [generating, setGenerating] = useState(false);
   const [generatingStep, setGeneratingStep] = useState("");
   const [error, setError] = useState("");
@@ -152,6 +157,13 @@ export default function CreateExamPage() {
       localStorage.setItem(
         EXAM_CONTEXT_KEY,
         JSON.stringify({ subject_id: subjectId, exam_id: exam.id, lecture_ids: lectureIds })
+      );
+      localStorage.setItem(
+        TIMED_MODE_KEY,
+        JSON.stringify({
+          timedMode,
+          totalTimeMinutes: Number(totalTimeMinutes) || DEFAULT_TOTAL_TIME_MINUTES,
+        })
       );
       localStorage.removeItem("revisor_result");
       localStorage.removeItem("revisor_results");
@@ -289,6 +301,33 @@ export default function CreateExamPage() {
                     <SelectItem value="hard">Hard</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="space-y-3 rounded-[12px] border-2 border-border p-3.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="timed-mode" className="text-sm font-semibold">
+                      Timed Mode
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Race a single countdown for the whole exam.
+                    </p>
+                  </div>
+                  <Switch id="timed-mode" checked={timedMode} onCheckedChange={setTimedMode} />
+                </div>
+                {timedMode && (
+                  <div className="space-y-1.5 animate-fade-in">
+                    <Label htmlFor="total-time">Total time (minutes)</Label>
+                    <Input
+                      id="total-time"
+                      type="number"
+                      min="1"
+                      max="180"
+                      value={totalTimeMinutes}
+                      onChange={(e) => setTotalTimeMinutes(e.target.value)}
+                    />
+                  </div>
+                )}
               </div>
 
               {error && <p className="text-sm text-destructive">{error}</p>}
