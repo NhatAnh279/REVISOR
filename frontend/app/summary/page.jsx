@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/
 import { Badge } from "@/components/ui/badge";
 import { SiteHeader } from "@/components/site-header";
 import { getFeedbackBatch } from "@/lib/api";
+import { clearCurrentQuiz, clearExamContext } from "@/lib/resume-quiz";
 
 function loadStoredResults() {
   if (typeof window === "undefined") return null;
@@ -65,57 +66,144 @@ function ScoreRing({ percent }) {
   );
 }
 
+const PDF_COLORS = {
+  black: [30, 27, 75], // matches the app's --foreground token
+  muted: [113, 113, 130],
+  red: [239, 68, 68], // --destructive
+  green: [16, 185, 129], // --success
+  purple: [167, 139, 250], // --primary-light ("tím nhạt")
+  boxBorder: [221, 214, 254], // --border
+  divider: [221, 214, 254],
+};
+
+// Measures wrapped text at a given font/size using jsPDF's own line-height
+// factor, so the box height computed here always matches what doc.text()
+// actually renders (no drift between measuring and drawing).
+function prepareText(doc, text, { font = "normal", size = 11, color = PDF_COLORS.black } = {}, maxWidth) {
+  doc.setFont("helvetica", font);
+  doc.setFontSize(size);
+  const lines = doc.splitTextToSize(text, maxWidth);
+  const lineHeight = (size * doc.getLineHeightFactor() * 25.4) / 72; // pt -> mm
+  return { lines, font, size, color, lineHeight, height: lines.length * lineHeight };
+}
+
+// Draws a previously-measured block starting at the given baseline `y`,
+// returning the baseline `y` just past its last line.
+function renderText(doc, prepared, x, y) {
+  doc.setFont("helvetica", prepared.font);
+  doc.setFontSize(prepared.size);
+  doc.setTextColor(...prepared.color);
+  doc.text(prepared.lines, x, y);
+  return y + prepared.height;
+}
+
 function buildResultsPdf(results, wrongReview) {
   const doc = new jsPDF();
-  const marginX = 14;
-  const contentWidth = 180;
+  const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 16;
+  const contentWidth = pageWidth - marginX * 2;
+  const boxPaddingX = 6;
+  const boxPaddingY = 5;
+  const blockGap = 2.5;
+  const boxGap = 6;
+  const innerWidth = contentWidth - boxPaddingX * 2;
   let y = 20;
 
-  function ensureSpace(lineCount = 1) {
-    if (y + lineCount * 6 > pageHeight - 14) {
+  function ensureSpace(height) {
+    if (y + height > pageHeight - 16) {
       doc.addPage();
       y = 20;
     }
   }
 
-  function writeParagraph(text, { font = "normal", size = 11, color = [20, 20, 20] } = {}) {
-    doc.setFont("helvetica", font);
-    doc.setFontSize(size);
-    doc.setTextColor(...color);
-    const lines = doc.splitTextToSize(text, contentWidth);
-    ensureSpace(lines.length);
-    doc.text(lines, marginX, y);
-    y += lines.length * 6;
+  function sectionHeading(text) {
+    ensureSpace(10);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(...PDF_COLORS.black);
+    doc.text(text, marginX, y);
+    y += 9;
   }
 
-  writeParagraph("REVISOR — Quiz Results", { font: "bold", size: 18 });
-  writeParagraph(new Date(results.date).toLocaleString(), { size: 11, color: [90, 90, 90] });
-  writeParagraph(
-    `Score: ${results.score.correct}/${results.score.total} (${results.score.score_percent}%)`,
-    { font: "bold", size: 13 }
-  );
-  y += 4;
+  // Draws one bordered, rounded box: a bold question line, then any number
+  // of colored detail lines, all pre-measured so the box fits its content
+  // exactly (no overflow, no leftover whitespace).
+  function drawBox(questionText, detailLines) {
+    const question = prepareText(doc, questionText, { font: "bold", size: 11.5 }, innerWidth);
+    const details = detailLines
+      .filter((d) => d.text)
+      .map((d) => prepareText(doc, d.text, { size: 10.5, font: d.font || "normal", color: d.color }, innerWidth));
 
+    const boxHeight =
+      boxPaddingY * 2 +
+      question.height +
+      details.reduce((sum, d) => sum + blockGap + d.height, 0);
+
+    ensureSpace(boxHeight + boxGap);
+
+    const boxTop = y;
+    doc.setDrawColor(...PDF_COLORS.boxBorder);
+    doc.setLineWidth(0.4);
+    doc.roundedRect(marginX, boxTop, contentWidth, boxHeight, 3, 3);
+
+    let textY = boxTop + boxPaddingY + question.lineHeight * 0.8;
+    textY = renderText(doc, question, marginX + boxPaddingX, textY);
+    details.forEach((detail) => {
+      textY += blockGap;
+      textY = renderText(doc, detail, marginX + boxPaddingX, textY);
+    });
+
+    y = boxTop + boxHeight + boxGap;
+  }
+
+  // ---- Header ----
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(20);
+  doc.setTextColor(...PDF_COLORS.black);
+  doc.text("REVISOR — Quiz Results", marginX, y);
+  y += 10;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11);
+  doc.setTextColor(...PDF_COLORS.muted);
+  doc.text(new Date(results.date).toLocaleString(), marginX, y);
+
+  const scoreText = `Score: ${results.score.correct}/${results.score.total} (${results.score.score_percent}%)`;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(...PDF_COLORS.black);
+  doc.text(scoreText, marginX + contentWidth - doc.getTextWidth(scoreText), y);
+  y += 6;
+
+  doc.setDrawColor(...PDF_COLORS.divider);
+  doc.setLineWidth(0.6);
+  doc.line(marginX, y, marginX + contentWidth, y);
+  y += 10;
+
+  // ---- Wrong answers ----
   if (wrongReview.length > 0) {
-    writeParagraph("Wrong Answers", { font: "bold", size: 14 });
+    sectionHeading("Wrong Answers");
     wrongReview.forEach((item, index) => {
-      writeParagraph(`${index + 1}. ${item.question}`, { font: "bold", size: 11 });
-      writeParagraph(`Your answer: ${item.student_answer}`, { color: [220, 38, 38] });
-      writeParagraph(`Correct answer: ${item.correct_answer}`, { color: [16, 185, 129] });
-      if (item.hint) {
-        writeParagraph(`Hint: ${item.hint}`, { font: "italic", color: [124, 58, 237] });
-      }
-      y += 4;
+      drawBox(`${index + 1}. ${item.question}`, [
+        { text: `Your answer: ${item.student_answer}`, color: PDF_COLORS.red },
+        { text: `Correct answer: ${item.correct_answer}`, color: PDF_COLORS.green },
+        item.hint && {
+          text: `\u{1F4A1} Hint: ${item.hint}`,
+          font: "italic",
+          color: PDF_COLORS.purple,
+        },
+      ]);
     });
   }
 
+  // ---- Flagged questions ----
   if (results.flagged_questions?.length > 0) {
-    writeParagraph("Flagged Questions", { font: "bold", size: 14 });
+    sectionHeading("Flagged Questions");
     results.flagged_questions.forEach((item, index) => {
-      writeParagraph(`${index + 1}. ${item.question}`, { font: "bold", size: 11 });
-      writeParagraph(`Correct answer: ${item.correct_answer}`, { color: [16, 185, 129] });
-      y += 4;
+      drawBox(`${index + 1}. ${item.question}`, [
+        { text: `Correct answer: ${item.correct_answer}`, color: PDF_COLORS.green },
+      ]);
     });
   }
 
@@ -174,6 +262,8 @@ export default function SummaryPage() {
   function handleStartNewQuiz() {
     localStorage.removeItem("revisor_questions");
     localStorage.removeItem("revisor_results");
+    clearCurrentQuiz();
+    clearExamContext();
     router.push("/");
   }
 

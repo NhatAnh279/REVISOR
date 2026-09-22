@@ -99,8 +99,8 @@ async def generate(lecture: LectureInput):
     slides = [slide for slide in lecture.slides if slide.text.strip()]
     if not slides:
         raise HTTPException(status_code=400, detail="Slide list is empty")
-    if not 5 <= lecture.num_questions <= 15:
-        raise HTTPException(status_code=400, detail="num_questions must be between 5 and 15")
+    if not 5 <= lecture.num_questions <= 30:
+        raise HTTPException(status_code=400, detail="num_questions must be between 5 and 30")
 
     lecture_text = build_lecture_text(slides)
 

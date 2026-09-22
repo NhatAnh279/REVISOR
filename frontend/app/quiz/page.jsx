@@ -17,8 +17,17 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { SiteHeader } from "@/components/site-header";
 import { getFeedback, getSummary } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
+import {
+  CURRENT_QUIZ_KEY,
+  SOURCE_NAME_KEY,
+  clearCurrentQuiz,
+  clearExamContext,
+  loadCurrentQuiz,
+  loadExamContext,
+} from "@/lib/resume-quiz";
 
-function loadStoredQuestions() {
+function loadFreshQuestions() {
   if (typeof window === "undefined") return null;
   try {
     const stored = localStorage.getItem("revisor_questions");
@@ -30,17 +39,78 @@ function loadStoredQuestions() {
   }
 }
 
+// Rebuilds the index-keyed `answers`/`submissions`/`flagged` state this page
+// works with from the id-keyed record saved for resuming a quiz.
+function restoreStateFromSavedQuiz(savedQuiz, questions) {
+  const submissions = {};
+  const answers = {};
+  const flaggedIndices = [];
+  if (savedQuiz?.answers && questions) {
+    questions.forEach((q, i) => {
+      const entry = savedQuiz.answers[q.id];
+      if (!entry) return;
+      if (entry.flagged) flaggedIndices.push(i);
+      if (entry.student_answer != null) {
+        submissions[i] = {
+          question: q.question,
+          correct_answer: q.answer,
+          student_answer: entry.student_answer,
+          is_correct: entry.is_correct,
+          hint: entry.hint,
+        };
+        answers[i] = {
+          question: q.question,
+          is_correct: entry.is_correct,
+          topic: q.topic,
+        };
+      }
+    });
+  }
+  return { submissions, answers, flaggedIndices };
+}
+
+function computeAnswerViewState(index, questions, submissions) {
+  const existing = submissions[index];
+  if (!existing) {
+    return { selectedOption: "", textAnswer: "", submitted: false, feedback: null };
+  }
+  const targetQuestion = questions[index];
+  return {
+    selectedOption: targetQuestion.type === "mcq" ? existing.student_answer : "",
+    textAnswer: targetQuestion.type !== "mcq" ? existing.student_answer : "",
+    submitted: true,
+    feedback: { is_correct: existing.is_correct, hint: existing.hint },
+  };
+}
+
 export default function QuizPage() {
   const router = useRouter();
-  const [questions] = useState(loadStoredQuestions);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedOption, setSelectedOption] = useState("");
-  const [textAnswer, setTextAnswer] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const [feedback, setFeedback] = useState(null);
-  const [answers, setAnswers] = useState({});
-  const [submissions, setSubmissions] = useState({});
-  const [flagged, setFlagged] = useState(() => new Set());
+  const [savedQuiz] = useState(loadCurrentQuiz);
+  const [questions] = useState(() => savedQuiz?.questions ?? loadFreshQuestions());
+  const [sourceName] = useState(
+    () =>
+      savedQuiz?.sourceName ??
+      (typeof window === "undefined" ? null : localStorage.getItem(SOURCE_NAME_KEY))
+  );
+  const [examContext] = useState(() => savedQuiz?.examContext ?? loadExamContext());
+  const [startedAt] = useState(() => savedQuiz?.startedAt ?? Date.now());
+  const [restored] = useState(() => restoreStateFromSavedQuiz(savedQuiz, questions));
+  const [currentIndex, setCurrentIndex] = useState(() => {
+    const idx = savedQuiz?.currentIndex;
+    return questions && Number.isInteger(idx) && idx >= 0 && idx < questions.length ? idx : 0;
+  });
+  const [initialView] = useState(() =>
+    questions
+      ? computeAnswerViewState(currentIndex, questions, restored.submissions)
+      : { selectedOption: "", textAnswer: "", submitted: false, feedback: null }
+  );
+  const [selectedOption, setSelectedOption] = useState(initialView.selectedOption);
+  const [textAnswer, setTextAnswer] = useState(initialView.textAnswer);
+  const [submitted, setSubmitted] = useState(initialView.submitted);
+  const [feedback, setFeedback] = useState(initialView.feedback);
+  const [answers, setAnswers] = useState(() => restored.answers);
+  const [submissions, setSubmissions] = useState(() => restored.submissions);
+  const [flagged, setFlagged] = useState(() => new Set(restored.flaggedIndices));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -49,6 +119,37 @@ export default function QuizPage() {
       router.replace("/");
     }
   }, [questions, router]);
+
+  // Auto-save progress so the quiz can be resumed after a refresh or a trip
+  // back to the upload/history pages.
+  useEffect(() => {
+    if (!questions) return;
+    const answersById = {};
+    questions.forEach((q, i) => {
+      const sub = submissions[i];
+      const isFlaggedQuestion = flagged.has(i);
+      if (sub || isFlaggedQuestion) {
+        answersById[q.id] = {
+          student_answer: sub?.student_answer ?? null,
+          is_correct: sub?.is_correct ?? null,
+          hint: sub?.hint ?? null,
+          flagged: isFlaggedQuestion,
+        };
+      }
+    });
+    localStorage.setItem(
+      CURRENT_QUIZ_KEY,
+      JSON.stringify({
+        questions,
+        sourceName,
+        examContext,
+        answers: answersById,
+        currentIndex,
+        startedAt,
+        status: "in_progress",
+      })
+    );
+  }, [questions, sourceName, examContext, submissions, flagged, currentIndex, startedAt]);
 
   if (!questions) return null;
 
@@ -164,24 +265,28 @@ export default function QuizPage() {
         })
       );
 
-      const historyEntry = {
-        date,
-        score: result.correct,
-        total: result.total,
-        score_percent: result.score_percent,
-        weak_topics: result.weak_topics,
-        flagged_questions: flaggedQuestions,
-        wrong_questions: wrongQuestions,
-      };
-      let history = [];
-      try {
-        const stored = JSON.parse(localStorage.getItem("revisor_history") || "[]");
-        if (Array.isArray(stored)) history = stored;
-      } catch {
-        history = [];
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        const { error: historyError } = await supabase.from("quiz_history").insert({
+          user_id: user.id,
+          date,
+          score: result.correct,
+          total: result.total,
+          score_percent: result.score_percent,
+          weak_topics: result.weak_topics,
+          questions: { flagged_questions: flaggedQuestions, wrong_questions: wrongQuestions },
+          subject_id: examContext?.subject_id ?? null,
+          exam_id: examContext?.exam_id ?? null,
+          lecture_ids: examContext?.lecture_ids ?? null,
+        });
+        if (historyError) {
+          console.error("Failed to save quiz history:", historyError.message);
+        }
       }
-      history.push(historyEntry);
-      localStorage.setItem("revisor_history", JSON.stringify(history));
+      clearCurrentQuiz();
+      clearExamContext();
 
       router.push("/summary");
     } catch (err) {

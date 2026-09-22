@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Flag, TrendingUp, XCircle } from "lucide-react";
+import { ChevronDown, Flag, Loader2, TrendingUp, XCircle } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -21,15 +21,24 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SiteHeader } from "@/components/site-header";
+import { supabase } from "@/lib/supabase";
+import {
+  countAnsweredQuestions,
+  formatTimeAgo,
+  getQuizLabel,
+  loadCurrentQuiz,
+} from "@/lib/resume-quiz";
 
-function loadHistory() {
-  if (typeof window === "undefined") return [];
-  try {
-    const stored = JSON.parse(localStorage.getItem("revisor_history") || "[]");
-    return Array.isArray(stored) ? stored : [];
-  } catch {
-    return [];
-  }
+// Rows come back as { date, score, total, score_percent, weak_topics,
+// questions: { flagged_questions, wrong_questions } }; flatten the jsonb
+// column so the rest of this page can read entry.flagged_questions /
+// entry.wrong_questions directly.
+function normalizeHistoryRow(row) {
+  return {
+    ...row,
+    flagged_questions: row.questions?.flagged_questions || [],
+    wrong_questions: row.questions?.wrong_questions || [],
+  };
 }
 
 function formatDate(iso) {
@@ -85,8 +94,31 @@ function ChartTooltip({ active, payload }) {
 
 export default function HistoryPage() {
   const router = useRouter();
-  const [history] = useState(loadHistory);
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [historyError, setHistoryError] = useState("");
+  const [currentQuiz] = useState(loadCurrentQuiz);
   const [expandedIndex, setExpandedIndex] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from("quiz_history")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          setHistoryError(error.message);
+        } else {
+          setHistory((data || []).map(normalizeHistoryRow));
+        }
+        setLoadingHistory(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const chartData = useMemo(() => {
     const chronological = [...history].sort(
@@ -124,7 +156,14 @@ export default function HistoryPage() {
             </p>
           </div>
 
-          {history.length === 0 ? (
+          {loadingHistory ? (
+            <div className="flex items-center justify-center gap-2 py-14 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Loading your history...
+            </div>
+          ) : historyError ? (
+            <p className="text-sm text-destructive">{historyError}</p>
+          ) : history.length === 0 && !currentQuiz ? (
             <Card>
               <CardContent className="flex flex-col items-center gap-3 py-14 text-center">
                 <span className="flex size-12 items-center justify-center rounded-full bg-accent text-primary">
@@ -219,6 +258,35 @@ export default function HistoryPage() {
               </Card>
 
               <div className="space-y-3">
+                {currentQuiz && (
+                  <Card size="sm" className="border-flag">
+                    <CardContent className="flex items-center justify-between gap-4">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-foreground">
+                            {getQuizLabel(currentQuiz)}
+                          </p>
+                          <Badge
+                            className="border-transparent"
+                            style={{
+                              backgroundColor: "var(--flag)",
+                              color: "var(--flag-foreground)",
+                            }}
+                          >
+                            In Progress
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {countAnsweredQuestions(currentQuiz)}/{currentQuiz.questions.length}{" "}
+                          answered — started {formatTimeAgo(currentQuiz.startedAt)}
+                        </p>
+                      </div>
+                      <Button size="sm" onClick={() => router.push("/quiz")}>
+                        Continue
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
                 {newestFirst.map((entry, i) => {
                   const isOpen = expandedIndex === i;
                   const weakTopics = entry.weak_topics || [];

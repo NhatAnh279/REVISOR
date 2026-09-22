@@ -22,6 +22,14 @@ import {
 } from "@/components/ui/select";
 import { SiteHeader } from "@/components/site-header";
 import { uploadSlides, generateQuiz } from "@/lib/api";
+import {
+  SOURCE_NAME_KEY,
+  clearCurrentQuiz,
+  clearExamContext,
+  formatTimeAgo,
+  getQuizLabel,
+  loadCurrentQuiz,
+} from "@/lib/resume-quiz";
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".pptx"];
 
@@ -40,6 +48,16 @@ export default function UploadPage() {
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState("");
   const [error, setError] = useState("");
+  const [unfinishedQuiz, setUnfinishedQuiz] = useState(loadCurrentQuiz);
+
+  function handleResumeQuiz() {
+    router.push("/quiz");
+  }
+
+  function handleDiscardQuiz() {
+    clearCurrentQuiz();
+    setUnfinishedQuiz(null);
+  }
 
   function handleFileSelected(selected) {
     if (!selected) return;
@@ -77,8 +95,11 @@ export default function UploadPage() {
       });
 
       localStorage.setItem("revisor_questions", JSON.stringify(questions));
+      localStorage.setItem(SOURCE_NAME_KEY, file.name);
       localStorage.removeItem("revisor_answers");
       localStorage.removeItem("revisor_result");
+      clearCurrentQuiz();
+      clearExamContext();
 
       router.push("/quiz");
     } catch (err) {
@@ -94,6 +115,26 @@ export default function UploadPage() {
 
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-16">
         <div className="w-full max-w-lg animate-fade-in space-y-6">
+          {unfinishedQuiz && (
+            <Card className="border-flag bg-flag/10">
+              <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm font-medium text-foreground">
+                  You have an unfinished quiz —{" "}
+                  <span className="font-bold">{getQuizLabel(unfinishedQuiz)}</span>{" "}
+                  started {formatTimeAgo(unfinishedQuiz.startedAt)}
+                </p>
+                <div className="flex shrink-0 gap-2">
+                  <Button size="sm" onClick={handleResumeQuiz}>
+                    Resume Quiz
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={handleDiscardQuiz}>
+                    Discard
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <div className="space-y-1.5 text-center">
             <h1 className="text-3xl font-extrabold tracking-tight text-foreground">
               Turn your lectures into smart quizzes
