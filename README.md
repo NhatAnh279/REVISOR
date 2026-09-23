@@ -231,6 +231,6 @@ REVISOR/
 
 <div align="center">
 
-Built with ❤️ for students.
+Built with ❤️ for students
 
 </div>
