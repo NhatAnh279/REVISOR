@@ -21,25 +21,25 @@ An AI-powered study assistant that turns lecture slides into adaptive quizzes, g
 
 ## 🔍 Overview
 
-Reviewing lecture slides passively is slow, and most students don't have time to write their own practice questions. **REVISOR** closes that gap: upload a lecture deck (PDF or PPTX) and Claude generates a full quiz — a mix of multiple-choice and short-answer questions — covering the material end to end, streamed in as they're written.
+Reviewing lecture slides passively is slow, and most students don't have time to write their own practice questions. **REVISOR** closes that gap: upload a lecture deck (PDF or PPTX) and Claude generates a full quiz - a mix of multiple-choice and short-answer questions - covering the material end to end, streamed in as they're written.
 
-Beyond single-lecture quizzes, REVISOR also lets students organize lectures into **Subject folders** and combine several lectures into a single **mock exam**, so revision isn't limited to one deck at a time. Instead of just marking answers right or wrong, REVISOR's feedback is Socratic — it nudges students toward the correct answer with leading questions rather than revealing it outright, so the practice actually builds understanding instead of just producing an answer key.
+Beyond single-lecture quizzes, REVISOR also lets students organize lectures into **Subject folders** and combine several lectures into a single **mock exam**, so revision isn't limited to one deck at a time. Instead of just marking answers right or wrong, REVISOR's feedback is Socratic - it nudges students toward the correct answer with leading questions rather than revealing it outright, so the practice actually builds understanding instead of just producing an answer key.
 
 ---
 
 ## ✨ Features
 
-- 📤 **Upload lecture slides** — drag-and-drop PDF or PPTX files, parsed straight to text
-- 🧠 **AI-generated quiz questions** — mixed multiple-choice / short-answer, at Easy, Medium, or Hard difficulty
-- ⚡ **Real-time streaming** — questions appear one by one as Claude writes them, and Socratic hints stream in word by word instead of a blocking spinner
-- 💡 **Socratic feedback** — leading questions that guide students toward the answer instead of revealing it
-- 📁 **Subject folders & exam creation** — group lectures by subject and combine multiple lectures into one mock exam
-- ⏱️ **Timed mode** — a single countdown for the whole quiz, for exam-condition practice
-- 🚩 **Flag questions** — mark questions to revisit before finishing
-- 📊 **Performance history & analytics** — score trends over time, weak-topic breakdowns, charted with Recharts
-- 📄 **Export results to PDF** — a formatted report of the quiz, including wrong answers and hints
-- 🔄 **Resume interrupted quizzes** — progress autosaves locally, so a closed tab or dropped connection doesn't lose an in-progress quiz
-- 🔐 **Authentication** — email/password login, registration with email confirmation, and password reset, via Supabase Auth
+- 📤 **Upload lecture slides** - drag-and-drop PDF or PPTX files, parsed straight to text
+- 🧠 **AI-generated quiz questions** - mixed multiple-choice / short-answer, at Easy, Medium, or Hard difficulty
+- ⚡ **Real-time streaming** - questions appear one by one as Claude writes them, and Socratic hints stream in word by word instead of a blocking spinner
+- 💡 **Socratic feedback** - leading questions that guide students toward the answer instead of revealing it
+- 📁 **Subject folders & exam creation** - group lectures by subject and combine multiple lectures into one mock exam
+- ⏱️ **Timed mode** - a single countdown for the whole quiz, for exam-condition practice
+- 🚩 **Flag questions** - mark questions to revisit before finishing
+- 📊 **Performance history & analytics** - score trends over time, weak-topic breakdowns, charted with Recharts
+- 📄 **Export results to PDF** - a formatted report of the quiz, including wrong answers and hints
+- 🔄 **Resume interrupted quizzes** - progress autosaves locally, so a closed tab or dropped connection doesn't lose an in-progress quiz
+- 🔐 **Authentication** - email/password login, registration with email confirmation, and password reset, via Supabase Auth
 
 ---
 
@@ -90,7 +90,7 @@ Beyond single-lecture quizzes, REVISOR also lets students organize lectures into
                    └─────────────────────┘
 ```
 
-The Next.js frontend talks to the FastAPI backend for slide parsing, question generation, and feedback (both streamed over Server-Sent Events), and talks to Supabase directly for authentication and for reading/writing subjects, lectures, exams, and quiz history — the backend itself is stateless and never touches the database.
+The Next.js frontend talks to the FastAPI backend for slide parsing, question generation, and feedback (both streamed over Server-Sent Events), and talks to Supabase directly for authentication and for reading/writing subjects, lectures, exams, and quiz history - the backend itself is stateless and never touches the database.
 
 ---
 
@@ -191,10 +191,10 @@ REVISOR/
 │   ├── main.py                # FastAPI app, CORS, router registration
 │   ├── requirements.txt
 │   └── routers/
-│       ├── upload.py          # POST /upload — slide text extraction
-│       ├── generate.py        # POST /generate — streaming question generation
-│       ├── feedback.py        # POST /feedback — streaming Socratic feedback
-│       └── summary.py         # POST /summary — score & weak-topic aggregation
+│       ├── upload.py          # POST /upload - slide text extraction
+│       ├── generate.py        # POST /generate - streaming question generation
+│       ├── feedback.py        # POST /feedback - streaming Socratic feedback
+│       └── summary.py         # POST /summary - score & weak-topic aggregation
 │
 ├── frontend/
 │   ├── app/
@@ -222,10 +222,10 @@ REVISOR/
 
 ## 🗺️ Future Roadmap
 
-- 🎯 **Personalized study roadmap** — adaptive recommendations based on weak topics
-- 📅 **Calendar & exam date tracking** — schedule reviews around upcoming exam dates
-- 📱 **Mobile app** — native companion app for on-the-go review
-- 🗃️ **Question bank caching** — reuse previously generated questions to cut down on regeneration cost and latency
+- 🎯 **Personalized study roadmap** - adaptive recommendations based on weak topics
+- 📅 **Calendar & exam date tracking** - schedule reviews around upcoming exam dates
+- 📱 **Mobile app** - native companion app for on-the-go review
+- 🗃️ **Question bank caching** - reuse previously generated questions to cut down on regeneration cost and latency
 
 ---
 
