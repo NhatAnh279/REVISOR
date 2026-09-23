@@ -24,7 +24,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { SiteHeader } from "@/components/site-header";
-import { uploadSlides, generateQuiz } from "@/lib/api";
+import { uploadSlides, streamGenerateQuiz } from "@/lib/api";
 import { getFileError } from "@/lib/file-validation";
 import {
   DEFAULT_TOTAL_TIME_MINUTES,
@@ -48,6 +48,7 @@ export default function UploadPage() {
   const [totalTimeMinutes, setTotalTimeMinutes] = useState(String(DEFAULT_TOTAL_TIME_MINUTES));
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState("");
+  const [streamedQuestions, setStreamedQuestions] = useState([]);
   const [error, setError] = useState("");
   const [unfinishedQuiz, setUnfinishedQuiz] = useState(loadCurrentQuiz);
 
@@ -85,6 +86,7 @@ export default function UploadPage() {
     if (!file) return;
     setLoading(true);
     setError("");
+    setStreamedQuestions([]);
     try {
       setLoadingStep("Analysing slides...");
       const { slides } = await uploadSlides(file);
@@ -94,11 +96,21 @@ export default function UploadPage() {
       }
       toast.success("Lecture uploaded ✓");
 
-      setLoadingStep("Generating questions...");
-      const { questions } = await generateQuiz(slides, {
+      setLoadingStep(`Generating question 0/${numQuestions}...`);
+      const questions = [];
+      for await (const event of streamGenerateQuiz(slides, {
         numQuestions: Number(numQuestions),
         difficulty,
-      });
+      })) {
+        if (event.type === "question") {
+          questions.push(event.data);
+          setStreamedQuestions((prev) => [...prev, event.data]);
+          setLoadingStep(`Generating question ${questions.length}/${numQuestions}...`);
+        }
+      }
+      if (questions.length === 0) {
+        throw new Error("Failed to generate questions. Please try again.");
+      }
 
       localStorage.setItem("revisor_questions", JSON.stringify(questions));
       localStorage.setItem(SOURCE_NAME_KEY, file.name);
@@ -124,6 +136,7 @@ export default function UploadPage() {
       if (inputRef.current) inputRef.current.value = "";
       setLoading(false);
       setLoadingStep("");
+      setStreamedQuestions([]);
     }
   }
 
@@ -272,6 +285,19 @@ export default function UploadPage() {
                   </div>
                 )}
               </div>
+
+              {streamedQuestions.length > 0 && (
+                <div className="max-h-48 space-y-1.5 overflow-y-auto rounded-[12px] border-2 border-border p-3">
+                  {streamedQuestions.map((q, i) => (
+                    <p
+                      key={q.id ?? i}
+                      className="animate-fade-in truncate text-xs font-medium text-muted-foreground"
+                    >
+                      {i + 1}. {q.question}
+                    </p>
+                  ))}
+                </div>
+              )}
 
               {error && <p className="text-sm text-destructive">{error}</p>}
 

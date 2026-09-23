@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, Clock, Loader2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SiteHeader } from "@/components/site-header";
-import { getFeedback, getSummary } from "@/lib/api";
+import { streamFeedback, getSummary } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import {
   CURRENT_QUIZ_KEY,
@@ -293,19 +293,29 @@ export default function QuizPage() {
     setEmptyAnswerError(false);
     setBusy(true);
     setError("");
+    setSubmitted(true);
+    setFeedback({ hint: "", streaming: true });
     try {
-      const result = await getFeedback({
+      let hint = "";
+      let isCorrect = false;
+      for await (const event of streamFeedback({
         question: current.question,
         correct_answer: current.answer,
         student_answer: studentAnswer,
-      });
-      setFeedback(result);
-      setSubmitted(true);
+      })) {
+        if (event.type === "token") {
+          hint += event.data;
+          setFeedback({ hint, streaming: true });
+        } else if (event.type === "done") {
+          isCorrect = event.is_correct;
+        }
+      }
+      setFeedback({ hint, is_correct: isCorrect });
       setAnswers((prev) => ({
         ...prev,
         [currentIndex]: {
           question: current.question,
-          is_correct: result.is_correct,
+          is_correct: isCorrect,
           topic: current.topic,
         },
       }));
@@ -315,8 +325,8 @@ export default function QuizPage() {
           question: current.question,
           correct_answer: current.answer,
           student_answer: studentAnswer,
-          is_correct: result.is_correct,
-          hint: result.hint,
+          is_correct: isCorrect,
+          hint,
         },
       }));
     } catch {
@@ -488,11 +498,12 @@ export default function QuizPage() {
     await handleSeeResults(mergedAnswers, mergedSubmissions);
   }
 
-  const feedbackAnimationClass = feedback
-    ? feedback.is_correct
-      ? "animate-flash-correct"
-      : "animate-shake"
-    : "";
+  const feedbackAnimationClass =
+    feedback && !feedback.streaming
+      ? feedback.is_correct
+        ? "animate-flash-correct"
+        : "animate-shake"
+      : "";
 
   const totalTimeSeconds = totalTimeMinutes * 60;
   const timeRatio = totalTimeSeconds > 0 ? timeRemaining / totalTimeSeconds : 0;
@@ -616,32 +627,40 @@ export default function QuizPage() {
                 {submitted && feedback && (
                   <div
                     className={`flex animate-fade-in items-start gap-3 rounded-[12px] border-2 p-4 text-sm ${
-                      feedback.isFallback
-                        ? "border-warning/30 bg-warning/10 text-warning"
-                        : feedback.is_correct
-                          ? "border-success/30 bg-success/10 text-success"
-                          : "border-destructive/30 bg-destructive/10 text-destructive"
+                      feedback.streaming
+                        ? "border-border bg-muted/50 text-foreground"
+                        : feedback.isFallback
+                          ? "border-warning/30 bg-warning/10 text-warning"
+                          : feedback.is_correct
+                            ? "border-success/30 bg-success/10 text-success"
+                            : "border-destructive/30 bg-destructive/10 text-destructive"
                     }`}
                   >
-                    {feedback.isFallback ? (
-                      <AlertTriangle className="mt-0.5 size-5 shrink-0" />
-                    ) : feedback.is_correct ? (
-                      <CheckCircle2 className="mt-0.5 size-5 shrink-0" />
-                    ) : (
-                      <XCircle className="mt-0.5 size-5 shrink-0" />
-                    )}
+                    {!feedback.streaming &&
+                      (feedback.isFallback ? (
+                        <AlertTriangle className="mt-0.5 size-5 shrink-0" />
+                      ) : feedback.is_correct ? (
+                        <CheckCircle2 className="mt-0.5 size-5 shrink-0" />
+                      ) : (
+                        <XCircle className="mt-0.5 size-5 shrink-0" />
+                      ))}
                     <div className="space-y-0.5">
                       <p className="font-bold">
-                        {feedback.isFallback
-                          ? "Could not get feedback"
-                          : feedback.is_correct
-                            ? "Correct! ✓"
-                            : "Not quite"}
+                        {feedback.streaming
+                          ? "Thinking..."
+                          : feedback.isFallback
+                            ? "Could not get feedback"
+                            : feedback.is_correct
+                              ? "Correct! ✓"
+                              : "Not quite"}
                       </p>
                       <p className="text-foreground/80">
                         {feedback.isFallback
                           ? `The correct answer is: ${current.answer}`
                           : feedback.hint}
+                        {feedback.streaming && (
+                          <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-current align-middle" />
+                        )}
                       </p>
                     </div>
                   </div>
@@ -655,21 +674,14 @@ export default function QuizPage() {
                     disabled={busy}
                     onClick={handleSubmitAnswer}
                   >
-                    {busy ? (
-                      <span className="flex items-center gap-2">
-                        <Loader2 className="size-4 animate-spin" />
-                        Checking...
-                      </span>
-                    ) : (
-                      "Submit Answer"
-                    )}
+                    Submit Answer
                   </Button>
                 ) : isLast ? (
                   <Button className="w-full" size="lg" disabled={busy} onClick={() => handleSeeResults()}>
                     {busy ? "Loading..." : "See Results"}
                   </Button>
                 ) : (
-                  <Button className="w-full" size="lg" onClick={goToNextQuestion}>
+                  <Button className="w-full" size="lg" disabled={busy} onClick={goToNextQuestion}>
                     Next Question
                   </Button>
                 )}
