@@ -25,10 +25,6 @@ Reviewing lecture slides passively is slow, and most students don't have time to
 
 Beyond single-lecture quizzes, REVISOR also lets students organize lectures into **Subject folders** and combine several lectures into a single **mock exam**, so revision isn't limited to one deck at a time. Instead of just marking answers right or wrong, REVISOR's feedback is Socratic — it nudges students toward the correct answer with leading questions rather than revealing it outright, so the practice actually builds understanding instead of just producing an answer key.
 
-> 📸 *Screenshot placeholder — add a screenshot of the quiz page or dashboard here.*
->
-> `![REVISOR quiz screenshot](./docs/screenshot-quiz.png)`
-
 ---
 
 ## ✨ Features
