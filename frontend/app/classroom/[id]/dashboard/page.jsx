@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { toast } from "sonner";
 import { ArrowLeft, Loader2, Sparkles } from "lucide-react";
 import {
   Bar,
@@ -20,33 +19,33 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SiteHeader } from "@/components/site-header";
-import { ClassInsights } from "@/components/classroom/class-insights";
-import { generatePersonalizedQuiz } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
+import { getAssignmentResults, getClassInsights, listAssignments } from "@/lib/api";
 import {
-  fetchClassroomData,
+  STRONG_THRESHOLD,
+  WEAK_THRESHOLD,
+  formatDate,
   getCurrentUser,
   studentLabel,
-  summarizeAttempts,
 } from "@/lib/classroom";
 
-const PERSONALIZED_QUIZ_SIZE = 10;
-// Distribution buckets: low / mid / high, matching the 0-50 / 50-70 / 70-100 split.
-const BUCKET_COLORS = ["var(--destructive)", "var(--warning)", "var(--success)"];
 const PASS_MARK = 70;
 const MAX_TOPIC_LABEL = 15;
+const GREEN = "var(--success)";
+const RED = "var(--destructive)";
 
 function truncate(text, max = MAX_TOPIC_LABEL) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
-// X-axis tick rotated 45deg so long topic names stay readable.
+// X-axis tick rotated 45 degrees so long topic names stay readable.
 function AngledTick({ x, y, payload }) {
   return (
     <g transform={`translate(${x},${y})`}>
@@ -57,59 +56,32 @@ function AngledTick({ x, y, payload }) {
   );
 }
 
-// Shows the full (untruncated) topic name.
-function TopicTooltip({ active, payload }) {
-  if (!active || !payload?.length) return null;
-  const { topic, average } = payload[0].payload;
-  return (
-    <div className="rounded-md border border-border bg-card px-3 py-2 text-xs shadow-md">
-      <p className="font-semibold text-foreground">{topic}</p>
-      <p className="text-muted-foreground">Average: {average}%</p>
-    </div>
-  );
-}
-
-function TrendTooltip({ active, payload }) {
-  if (!active || !payload?.length) return null;
-  const { title, average } = payload[0].payload;
-  return (
-    <div className="rounded-md border border-border bg-card px-3 py-2 text-xs shadow-md">
-      <p className="text-foreground">Assignment: {title}</p>
-      <p className="text-muted-foreground">Average: {average}%</p>
-    </div>
-  );
-}
-
-// The backend builds a personalized quiz from lecture slides, but an
-// assignment only stores its generated questions. Each question (with its
-// answer) is a faithful digest of the slide content it came from, so the
-// class's questions stand in as the "slides".
-function slidesFromAssignments(assignments) {
-  const slides = [];
-  for (const assignment of assignments) {
-    for (const q of assignment.questions) {
-      slides.push({
-        slide_number: slides.length + 1,
-        text: `${q.topic || "General"}: ${q.question} Answer: ${q.answer}`,
-      });
-    }
-  }
-  return slides;
-}
-
-function ChartCard({ title, children }) {
+function ChartCard({ title, empty, children }) {
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">{title}</CardTitle>
       </CardHeader>
-      <CardContent className="h-64">{children}</CardContent>
+      <CardContent className="h-72 text-muted-foreground">
+        {empty ? <p className="text-sm">No data yet.</p> : children}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <Card>
+      <CardContent className="space-y-1">
+        <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+        <p className="text-2xl font-extrabold text-foreground">{value}</p>
+      </CardContent>
     </Card>
   );
 }
 
 function TopicBadges({ topics, variant }) {
-  if (topics.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+  if (topics.length === 0) return <span className="text-xs text-muted-foreground">-</span>;
   return (
     <div className="flex flex-wrap gap-1">
       {topics.map((t) => (
@@ -121,155 +93,217 @@ function TopicBadges({ topics, variant }) {
   );
 }
 
+function pct(correct, total) {
+  return total === 0 ? null : Math.round((correct / total) * 100);
+}
+
+// Turns per-assignment results into everything the page renders.
+function buildDashboard({ assignments, resultsById, studentIds, names }) {
+  const topicTotals = {};
+  const studentTotals = {};
+  for (const id of studentIds) studentTotals[id] = { correct: 0, total: 0, topics: {} };
+
+  let completed = 0;
+  let pending = 0;
+  const overTime = [];
+
+  for (const assignment of assignments) {
+    const students = resultsById[assignment.id]?.students ?? [];
+    const answeredBy = {};
+
+    for (const s of students) {
+      const scores = (answeredBy[s.student_id] = new Set());
+      const totals = (studentTotals[s.student_id] ??= { correct: 0, total: 0, topics: {} });
+      for (const a of s.attempts) {
+        scores.add(a.question_id);
+        const topic = a.topic || "General";
+        const classTopic = (topicTotals[topic] ??= { correct: 0, total: 0 });
+        const studentTopic = (totals.topics[topic] ??= { correct: 0, total: 0 });
+        for (const bucket of [classTopic, studentTopic, totals]) {
+          bucket.total += 1;
+          if (a.is_correct) bucket.correct += 1;
+        }
+      }
+    }
+
+    for (const id of studentIds) {
+      const done = answeredBy[id]?.size ?? 0;
+      if (assignment.questions.length > 0 && done >= assignment.questions.length) completed += 1;
+      else pending += 1;
+    }
+
+    if (students.length > 0) {
+      const avg = students.reduce((sum, s) => sum + s.score, 0) / students.length;
+      overTime.push({ date: formatDate(assignment.created_at), average: Math.round(avg) });
+    }
+  }
+
+  const rows = Object.entries(studentTotals).map(([id, t]) => {
+    const topics = Object.entries(t.topics).map(([topic, s]) => ({
+      topic,
+      ratio: s.correct / s.total,
+    }));
+    return {
+      id,
+      name: names[id] || studentLabel(id),
+      score: pct(t.correct, t.total),
+      weak: topics.filter((x) => x.ratio < WEAK_THRESHOLD).map((x) => x.topic),
+      strong: topics.filter((x) => x.ratio >= STRONG_THRESHOLD).map((x) => x.topic),
+    };
+  });
+  const scored = rows.filter((r) => r.score !== null);
+
+  return {
+    rows,
+    completed,
+    pending,
+    overTime: overTime.reverse(),
+    classAverage: scored.length
+      ? Math.round(scored.reduce((sum, r) => sum + r.score, 0) / scored.length)
+      : null,
+    topicAverages: Object.entries(topicTotals).map(([topic, s]) => ({
+      topic,
+      average: pct(s.correct, s.total),
+    })),
+  };
+}
+
+async function loadDashboard(classroomId) {
+  const user = await getCurrentUser();
+  const [classroomRes, enrollmentsRes] = await Promise.all([
+    supabase.from("classrooms").select("name,teacher_id").eq("id", classroomId).single(),
+    supabase.from("enrollments").select("student_id").eq("classroom_id", classroomId),
+  ]);
+  if (classroomRes.error) throw new Error(classroomRes.error.message);
+  if (classroomRes.data.teacher_id !== user?.id) {
+    throw new Error("Only the teacher of this classroom can view the dashboard.");
+  }
+
+  const studentIds = (enrollmentsRes.data || []).map((e) => e.student_id);
+  const [assignments, profilesRes] = await Promise.all([
+    listAssignments(classroomId),
+    studentIds.length
+      ? supabase.from("profiles").select("id,full_name").in("id", studentIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const results = await Promise.all(assignments.map((a) => getAssignmentResults(a.id)));
+
+  const resultsById = {};
+  assignments.forEach((a, i) => {
+    resultsById[a.id] = results[i];
+  });
+  const names = {};
+  for (const p of profilesRes.data || []) names[p.id] = p.full_name;
+
+  return {
+    classroomName: classroomRes.data.name,
+    assignments,
+    names,
+    dashboard: buildDashboard({ assignments, resultsById, studentIds, names }),
+    withAttempts: assignments.filter((a) => (resultsById[a.id]?.students ?? []).length > 0),
+  };
+}
+
 export default function ClassroomDashboardPage() {
   const { id } = useParams();
   const router = useRouter();
-  const [data, setData] = useState(null);
+  const [state, setState] = useState(null);
   const [error, setError] = useState("");
-  const [generatingFor, setGeneratingFor] = useState(null);
-  const [personalized, setPersonalized] = useState(null);
+  const [insightAssignmentId, setInsightAssignmentId] = useState("");
+  const [insights, setInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insightsError, setInsightsError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      try {
-        const [user, classroomData] = await Promise.all([getCurrentUser(), fetchClassroomData(id)]);
+    loadDashboard(id)
+      .then((result) => {
         if (cancelled) return;
-        if (classroomData.classroom.teacher_id !== user?.id) {
-          setError("Only the classroom's teacher can view the dashboard.");
-          return;
-        }
-        setData(classroomData);
-      } catch (err) {
+        setState(result);
+        setInsightAssignmentId(result.withAttempts[0]?.id ?? "");
+      })
+      .catch((err) => {
         if (!cancelled) setError(err.message || "Could not load the dashboard.");
-      }
-    }
-    load();
+      });
     return () => {
       cancelled = true;
     };
   }, [id]);
 
-  const summary = useMemo(
-    () => (data ? summarizeAttempts(data.attempts, data.studentIds, data.assignments) : null),
-    [data]
-  );
+  const dashboard = state?.dashboard;
+  const topicData = useMemo(() => dashboard?.topicAverages ?? [], [dashboard]);
 
-  async function handleGenerate(studentId) {
-    const slides = slidesFromAssignments(data.assignments);
-    if (slides.length === 0) {
-      toast.error("Create an assignment first — there is no lecture content to draw on.");
-      return;
-    }
-    setGeneratingFor(studentId);
+  async function handleInsights() {
+    setInsightsLoading(true);
+    setInsightsError("");
+    setInsights(null);
     try {
-      const { questions } = await generatePersonalizedQuiz({
-        classroomId: id,
-        studentId,
-        slides,
-        numQuestions: PERSONALIZED_QUIZ_SIZE,
-      });
-      setPersonalized({ studentId, questions });
+      setInsights(await getClassInsights(insightAssignmentId));
     } catch (err) {
-      toast.error(err.message || "Could not generate the quiz.");
+      setInsightsError(err.message || "Could not generate insights.");
     } finally {
-      setGeneratingFor(null);
+      setInsightsLoading(false);
     }
   }
-
-  const backButton = (
-    <button
-      type="button"
-      onClick={() => router.push(`/classroom/${id}`)}
-      className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground hover:text-foreground"
-    >
-      <ArrowLeft className="size-4" />
-      {data?.classroom.name ?? "Classroom"}
-    </button>
-  );
 
   return (
     <div className="flex flex-1 flex-col">
       <SiteHeader />
       <main className="flex-1 animate-fade-in px-4 py-10">
         <div className="mx-auto w-full max-w-5xl space-y-6">
-          {backButton}
+          <button
+            type="button"
+            onClick={() => router.push(`/classroom/${id}`)}
+            className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-4" />
+            {state?.classroomName ?? "Classroom"}
+          </button>
           <h1 className="text-2xl font-extrabold tracking-tight text-foreground">Dashboard</h1>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
-          {!data && !error && (
+          {!state && !error && (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
               Loading dashboard...
             </p>
           )}
 
-          {data && (
+          {state && (
             <>
-              <p className="text-sm text-muted-foreground">
-                {summary.classAverage === null
-                  ? "No student attempts yet."
-                  : `Class average: ${summary.classAverage}%`}
-              </p>
+              <div className="grid grid-cols-3 gap-3">
+                <Stat
+                  label="Class average"
+                  value={dashboard.classAverage === null ? "-" : `${dashboard.classAverage}%`}
+                />
+                <Stat label="Completed" value={dashboard.completed} />
+                <Stat label="Pending" value={dashboard.pending} />
+              </div>
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <ChartCard title="Average score per topic">
-                  {summary.topicAverages.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No data yet.</p>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={summary.topicAverages}>
-                        <CartesianGrid vertical={false} stroke="var(--border)" />
-                        <XAxis
-                          dataKey="topic"
-                          interval={0}
-                          height={70}
-                          tick={<AngledTick />}
-                        />
-                        <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
-                        <Tooltip content={<TopicTooltip />} cursor={{ fill: "var(--muted)" }} />
-                        <Bar dataKey="average" radius={[6, 6, 0, 0]}>
-                          {summary.topicAverages.map((entry) => (
-                            <Cell
-                              key={entry.topic}
-                              fill={entry.average >= PASS_MARK ? "var(--success)" : "var(--destructive)"}
-                            />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )}
-                </ChartCard>
-
-                <ChartCard title="Score distribution (students)">
+                <ChartCard title="Average score per topic" empty={topicData.length === 0}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={summary.distribution}>
+                    <BarChart data={topicData} margin={{ bottom: 40 }}>
                       <CartesianGrid vertical={false} stroke="var(--border)" />
-                      <XAxis dataKey="bucket" tick={{ fontSize: 11 }} />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                      <Tooltip formatter={(v) => [v, "Students"]} />
-                      <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                        {summary.distribution.map((entry, i) => (
-                          <Cell key={entry.bucket} fill={BUCKET_COLORS[i]} />
+                      <XAxis dataKey="topic" tick={<AngledTick />} interval={0} height={70} />
+                      <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={(v) => [`${v}%`, "Average"]} />
+                      <Bar dataKey="average" radius={[6, 6, 0, 0]}>
+                        {topicData.map((entry) => (
+                          <Cell key={entry.topic} fill={entry.average >= PASS_MARK ? GREEN : RED} />
                         ))}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </ChartCard>
-              </div>
 
-              <ChartCard title="Class Average Over Time">
-                {summary.trend.length < 2 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Complete more assignments to see trends
-                  </p>
-                ) : (
+                <ChartCard title="Class Average Over Time" empty={dashboard.overTime.length === 0}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={summary.trend}>
+                    <LineChart data={dashboard.overTime}>
                       <CartesianGrid vertical={false} stroke="var(--border)" />
                       <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                       <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
-                      <Tooltip content={<TrendTooltip />} />
+                      <Tooltip formatter={(v) => [`${v}%`, "Class average"]} />
                       <Line
                         type="monotone"
                         dataKey="average"
@@ -279,54 +313,36 @@ export default function ClassroomDashboardPage() {
                       />
                     </LineChart>
                   </ResponsiveContainer>
-                )}
-              </ChartCard>
+                </ChartCard>
+              </div>
 
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Students</CardTitle>
                 </CardHeader>
                 <CardContent className="overflow-x-auto">
-                  {summary.students.length === 0 ? (
+                  {dashboard.rows.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No students have joined yet.</p>
                   ) : (
-                    <table className="w-full min-w-[36rem] text-left text-sm">
+                    <table className="w-full min-w-[32rem] text-left text-sm">
                       <thead className="text-xs text-muted-foreground">
                         <tr>
-                          <th className="py-2 pr-3 font-semibold">Student</th>
+                          <th className="py-2 pr-3 font-semibold">Name</th>
                           <th className="py-2 pr-3 font-semibold">Score</th>
                           <th className="py-2 pr-3 font-semibold">Weak topics</th>
-                          <th className="py-2 pr-3 font-semibold">Strong topics</th>
-                          <th className="py-2 font-semibold" />
+                          <th className="py-2 font-semibold">Strong topics</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {summary.students.map((s) => (
-                          <tr key={s.id} className="border-t border-border align-top">
-                            <td className="py-2.5 pr-3 font-semibold text-foreground">
-                              {studentLabel(s.id)}
-                            </td>
-                            <td className="py-2.5 pr-3">{s.score === null ? "—" : `${s.score}%`}</td>
+                        {dashboard.rows.map((r) => (
+                          <tr key={r.id} className="border-t border-border align-top">
+                            <td className="py-2.5 pr-3 font-semibold text-foreground">{r.name}</td>
+                            <td className="py-2.5 pr-3">{r.score === null ? "-" : `${r.score}%`}</td>
                             <td className="py-2.5 pr-3">
-                              <TopicBadges topics={s.weakTopics} variant="destructive" />
+                              <TopicBadges topics={r.weak} variant="destructive" />
                             </td>
-                            <td className="py-2.5 pr-3">
-                              <TopicBadges topics={s.strongTopics} variant="success" />
-                            </td>
-                            <td className="py-2.5 text-right">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={generatingFor !== null}
-                                onClick={() => handleGenerate(s.id)}
-                              >
-                                {generatingFor === s.id ? (
-                                  <Loader2 className="size-4 animate-spin" />
-                                ) : (
-                                  <Sparkles className="size-4" />
-                                )}
-                                Generate Personalized Quiz
-                              </Button>
+                            <td className="py-2.5">
+                              <TopicBadges topics={r.strong} variant="success" />
                             </td>
                           </tr>
                         ))}
@@ -336,51 +352,69 @@ export default function ClassroomDashboardPage() {
                 </CardContent>
               </Card>
 
-              <section className="space-y-3">
-                <h2 className="flex items-center gap-2 text-lg font-bold text-foreground">
-                  <Sparkles className="size-5 text-primary" />
-                  AI Insights
-                </h2>
-                <ClassInsights
-                  assignments={data.assignments}
-                  assignmentsWithAttempts={new Set(data.attempts.map((a) => a.assignment_id))}
-                />
-              </section>
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Sparkles className="size-4 text-primary" />
+                    AI Insights
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {state.withAttempts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Insights are available once students have completed an assignment.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Select value={insightAssignmentId} onValueChange={setInsightAssignmentId}>
+                        <SelectTrigger className="w-full sm:w-72" aria-label="Assignment">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {state.withAttempts.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.title}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button disabled={insightsLoading} onClick={handleInsights}>
+                        {insightsLoading ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="size-4" />
+                        )}
+                        AI Insights
+                      </Button>
+                    </div>
+                  )}
+
+                  {insightsError && <p className="text-sm text-destructive">{insightsError}</p>}
+
+                  {insights && (
+                    <div className="space-y-3 text-sm">
+                      <p className="whitespace-pre-line text-foreground">
+                        {insights.teaching_recommendations}
+                      </p>
+                      {insights.student_insights
+                        .filter((s) => s.recommendation)
+                        .map((s) => (
+                          <div key={s.student_id}>
+                            <p className="font-semibold text-foreground">
+                              {state.names[s.student_id] || studentLabel(s.student_id)} (
+                              {Math.round(s.score)}%)
+                            </p>
+                            <p className="text-muted-foreground">{s.recommendation}</p>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </>
           )}
         </div>
       </main>
-
-      <Dialog open={personalized !== null} onOpenChange={(open) => !open && setPersonalized(null)}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
-              Personalized quiz for {personalized && studentLabel(personalized.studentId)}
-            </DialogTitle>
-            <DialogDescription>
-              Weighted toward this student&apos;s weak topics.
-            </DialogDescription>
-          </DialogHeader>
-          <ol className="space-y-3">
-            {personalized?.questions.map((q, i) => (
-              <li key={q.id} className="text-sm">
-                <p className="font-medium text-foreground">
-                  {i + 1}. {q.question}
-                </p>
-                {q.options && (
-                  <ul className="ml-4 list-disc text-xs text-muted-foreground">
-                    {q.options.map((o) => (
-                      <li key={o}>{o}</li>
-                    ))}
-                  </ul>
-                )}
-                <p className="text-xs text-success">Answer: {q.answer}</p>
-                <p className="text-xs text-muted-foreground">Topic: {q.topic}</p>
-              </li>
-            ))}
-          </ol>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

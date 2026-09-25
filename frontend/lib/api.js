@@ -178,3 +178,7 @@ export const generatePersonalizedQuiz = ({ classroomId, studentId, slides, numQu
       num_questions: numQuestions,
     },
   });
+export const listAssignments = (classroomId) =>
+  authRequest(`/classroom/${classroomId}/assignments`);
+export const getAssignmentResults = (assignmentId) =>
+  authRequest(`/classroom/${assignmentId}/results`);
