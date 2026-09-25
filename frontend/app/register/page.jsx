@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { MailCheck, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +38,7 @@ function validate({ fullName, email, password, confirmPassword }) {
 }
 
 export default function RegisterPage() {
+  const router = useRouter();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -81,7 +83,11 @@ export default function RegisterPage() {
     // With email confirmation on there is no session yet, so RLS would reject
     // this write; the handle_new_user trigger (migration 0005) creates the
     // profile from the signup metadata in that case.
-    if (data?.session && data.user) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (session && data.user) {
       const { error: profileError } = await supabase
         .from("profiles")
         .upsert({ id: data.user.id, full_name: fullName.trim(), role });
@@ -89,6 +95,9 @@ export default function RegisterPage() {
         setFormError("Account created, but we could not save your profile. Please contact support.");
         return;
       }
+      // Email confirmation is off: the user is already signed in.
+      router.push("/");
+      return;
     }
 
     setSuccess(true);
