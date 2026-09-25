@@ -43,7 +43,7 @@ const PASS_MARK = 70;
 const MAX_TOPIC_LABEL = 15;
 
 function truncate(text, max = MAX_TOPIC_LABEL) {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
 // X-axis tick rotated 45deg so long topic names stay readable.
