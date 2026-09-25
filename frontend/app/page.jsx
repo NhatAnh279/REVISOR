@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { clearClassroomContext } from "@/lib/classroom";
 import { SiteHeader } from "@/components/site-header";
 import { uploadSlides, streamGenerateQuiz } from "@/lib/api";
 import { getFileError } from "@/lib/file-validation";
@@ -125,6 +126,7 @@ export default function UploadPage() {
       localStorage.removeItem("revisor_result");
       clearCurrentQuiz();
       clearExamContext();
+      clearClassroomContext();
 
       router.push("/quiz");
     } catch (err) {

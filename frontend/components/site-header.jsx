@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { BookOpen, History, Home, Menu, X } from "lucide-react";
+import { BookOpen, GraduationCap, History, Home, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 
@@ -11,6 +11,7 @@ const NAV_LINKS = [
   { href: "/", label: "New Quiz", icon: Home },
   { href: "/subjects", label: "My Subjects", icon: BookOpen },
   { href: "/history", label: "History", icon: History },
+  { href: "/classroom", label: "Classroom", icon: GraduationCap },
 ];
 
 function UserMenu() {

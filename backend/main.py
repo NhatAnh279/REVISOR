@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from routers import upload, generate, feedback, summary
+from routers import upload, generate, feedback, summary, classroom, insights
 
 app = FastAPI()
 
@@ -19,6 +19,8 @@ app.include_router(upload.router)
 app.include_router(generate.router)
 app.include_router(feedback.router)
 app.include_router(summary.router)
+app.include_router(classroom.router)
+app.include_router(insights.router)
 
 @app.get("/")
 def root():

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertTriangle, CheckCircle2, Clock, XCircle } from "lucide-react";
@@ -18,7 +18,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SiteHeader } from "@/components/site-header";
-import { streamFeedback, getSummary } from "@/lib/api";
+import { streamFeedback, getSummary, recordAttempt } from "@/lib/api";
+import { clearClassroomContext, loadClassroomContext } from "@/lib/classroom";
 import { supabase } from "@/lib/supabase";
 import {
   CURRENT_QUIZ_KEY,
@@ -153,6 +154,11 @@ export default function QuizPage() {
       (typeof window === "undefined" ? null : localStorage.getItem(SOURCE_NAME_KEY))
   );
   const [examContext] = useState(() => savedQuiz?.examContext ?? loadExamContext());
+  // Set only when the quiz is a classroom assignment; personal quizzes leave
+  // it null and skip all classroom behaviour.
+  const [classroomContext] = useState(
+    () => savedQuiz?.classroomContext ?? loadClassroomContext()
+  );
   const [timedMode] = useState(
     () => savedQuiz?.timedMode ?? loadTimedModeSettings().timedMode
   );
@@ -186,6 +192,8 @@ export default function QuizPage() {
   const [error, setError] = useState("");
   const [emptyAnswerError, setEmptyAnswerError] = useState(false);
   const [shakeToken, setShakeToken] = useState(0);
+  // When the current question was first shown, for classroom time_spent.
+  const questionShownAt = useRef(Date.now());
 
   useEffect(() => {
     if (!questions) {
@@ -217,6 +225,7 @@ export default function QuizPage() {
         questions,
         sourceName,
         examContext,
+        classroomContext,
         timedMode,
         totalTimeMinutes,
         answers: answersById,
@@ -229,6 +238,7 @@ export default function QuizPage() {
     questions,
     sourceName,
     examContext,
+    classroomContext,
     timedMode,
     totalTimeMinutes,
     submissions,
@@ -284,6 +294,25 @@ export default function QuizPage() {
     });
   }
 
+  // Classroom assignments only: record this answer for the teacher. A failure
+  // must not block the student, so it just warns.
+  function reportAttempt(question, answer, isCorrect, questionIndex) {
+    if (!classroomContext) return Promise.resolve();
+    return recordAttempt({
+      assignment_id: classroomContext.assignment_id,
+      question_id: question.id,
+      question: question.question,
+      topic: question.topic ?? null,
+      student_answer: answer,
+      correct_answer: question.answer,
+      is_correct: isCorrect,
+      time_spent: Math.max(0, Math.round((Date.now() - questionShownAt.current) / 1000)),
+      flagged: flagged.has(questionIndex),
+    }).catch(() => {
+      toast.error("Could not save your answer to the classroom");
+    });
+  }
+
   async function handleSubmitAnswer() {
     if (!studentAnswer) {
       setEmptyAnswerError(true);
@@ -311,6 +340,7 @@ export default function QuizPage() {
         }
       }
       setFeedback({ hint, is_correct: isCorrect });
+      reportAttempt(current, studentAnswer, isCorrect, currentIndex);
       setAnswers((prev) => ({
         ...prev,
         [currentIndex]: {
@@ -335,6 +365,7 @@ export default function QuizPage() {
       toast.error("Could not get feedback, showing answer directly");
       setFeedback({ isFallback: true });
       setSubmitted(true);
+      reportAttempt(current, studentAnswer, false, currentIndex);
       setAnswers((prev) => ({
         ...prev,
         [currentIndex]: {
@@ -367,6 +398,7 @@ export default function QuizPage() {
     if (index < 0 || index >= questions.length || index === currentIndex) return;
     const existing = submissions[index];
     const targetQuestion = questions[index];
+    questionShownAt.current = Date.now();
     setCurrentIndex(index);
     setError("");
     setEmptyAnswerError(false);
@@ -468,6 +500,11 @@ export default function QuizPage() {
       clearExamContext();
       clearTimedModeSettings();
 
+      if (classroomContext) {
+        clearClassroomContext();
+        router.push(`/classroom/${classroomContext.classroom_id}`);
+        return;
+      }
       router.push("/summary");
     } catch (err) {
       setError(err.message || "Could not load results. Please try again.");
@@ -481,8 +518,10 @@ export default function QuizPage() {
   async function handleTimeUp() {
     const mergedAnswers = { ...answers };
     const mergedSubmissions = { ...submissions };
+    const pendingAttempts = [];
     questions.forEach((q, i) => {
       if (mergedSubmissions[i]) return;
+      pendingAttempts.push(reportAttempt(q, "", false, i));
       mergedAnswers[i] = { question: q.question, is_correct: false, topic: q.topic };
       mergedSubmissions[i] = {
         question: q.question,
@@ -495,6 +534,7 @@ export default function QuizPage() {
     setAnswers(mergedAnswers);
     setSubmissions(mergedSubmissions);
     setSubmitted(true);
+    await Promise.all(pendingAttempts);
     await handleSeeResults(mergedAnswers, mergedSubmissions);
   }
 

@@ -1,3 +1,5 @@
+import { supabase } from "@/lib/supabase";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function parseErrorDetail(response) {
@@ -131,3 +133,48 @@ export async function getSummary(records) {
     body: JSON.stringify(records),
   });
 }
+
+// --- Classroom API -------------------------------------------------------
+// These endpoints authenticate with the Supabase session's JWT.
+
+async function authHeaders(extra = {}) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) throw new Error("Session expired, please login to continue");
+  return { ...extra, Authorization: `Bearer ${session.access_token}` };
+}
+
+async function authRequest(path, { method = "GET", body } = {}) {
+  const headers = await authHeaders(body ? { "Content-Type": "application/json" } : {});
+  return request(`${API_BASE}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+export const listClassrooms = () => authRequest("/classroom/my-classrooms");
+export const createClassroom = ({ name, subject }) =>
+  authRequest("/classroom/create", { method: "POST", body: { name, subject } });
+export const joinClassroom = (joinCode) =>
+  authRequest("/classroom/join", { method: "POST", body: { join_code: joinCode } });
+export const createAssignment = ({ classroomId, title, dueDate, questions }) =>
+  authRequest("/classroom/assign", {
+    method: "POST",
+    body: { classroom_id: classroomId, title, due_date: dueDate || null, questions },
+  });
+export const recordAttempt = (attempt) =>
+  authRequest("/classroom/attempt", { method: "POST", body: attempt });
+export const getClassInsights = (assignmentId) =>
+  authRequest("/insights/class", { method: "POST", body: { assignment_id: assignmentId } });
+export const generatePersonalizedQuiz = ({ classroomId, studentId, slides, numQuestions }) =>
+  authRequest("/insights/personalized-quiz", {
+    method: "POST",
+    body: {
+      classroom_id: classroomId,
+      student_id: studentId,
+      slides,
+      num_questions: numQuestions,
+    },
+  });

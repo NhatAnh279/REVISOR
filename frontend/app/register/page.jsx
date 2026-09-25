@@ -16,8 +16,10 @@ import { SiteHeader } from "@/components/site-header";
 import { supabase } from "@/lib/supabase";
 import { getPasswordError, isValidEmail, mapAuthError } from "@/lib/auth-validation";
 
-function validate({ email, password, confirmPassword }) {
+function validate({ fullName, email, password, confirmPassword }) {
   const errors = {};
+
+  if (!fullName.trim()) errors.fullName = "This field is required";
 
   if (!email.trim()) errors.email = "This field is required";
   else if (!isValidEmail(email)) errors.email = "Please enter a valid email";
@@ -35,9 +37,11 @@ function validate({ email, password, confirmPassword }) {
 }
 
 export default function RegisterPage() {
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [role, setRole] = useState("student");
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,13 +54,17 @@ export default function RegisterPage() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const errors = validate({ email, password, confirmPassword });
+    const errors = validate({ fullName, email, password, confirmPassword });
     setFieldErrors(errors);
     setFormError("");
     if (Object.keys(errors).length > 0) return;
 
     setLoading(true);
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName.trim(), role } },
+    });
     setLoading(false);
 
     if (error) {
@@ -68,6 +76,19 @@ export default function RegisterPage() {
     if (data?.user?.identities?.length === 0) {
       setFormError("An account with this email already exists");
       return;
+    }
+
+    // With email confirmation on there is no session yet, so RLS would reject
+    // this write; the handle_new_user trigger (migration 0005) creates the
+    // profile from the signup metadata in that case.
+    if (data?.session && data.user) {
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .upsert({ id: data.user.id, full_name: fullName.trim(), role });
+      if (profileError) {
+        setFormError("Account created, but we could not save your profile. Please contact support.");
+        return;
+      }
     }
 
     setSuccess(true);
@@ -104,6 +125,17 @@ export default function RegisterPage() {
                 <CardContent>
                   <form className="space-y-4" onSubmit={handleSubmit} noValidate>
                     <FormField
+                      id="full-name"
+                      label="Full name"
+                      autoComplete="name"
+                      value={fullName}
+                      error={fieldErrors.fullName}
+                      onChange={(e) => {
+                        setFullName(e.target.value);
+                        clearFieldError("fullName");
+                      }}
+                    />
+                    <FormField
                       id="email"
                       label="Email"
                       type="email"
@@ -139,6 +171,24 @@ export default function RegisterPage() {
                         clearFieldError("confirmPassword");
                       }}
                     />
+
+                    <div className="space-y-1.5">
+                      <p className="text-sm font-medium text-foreground">I am a...</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {["student", "teacher"].map((r) => (
+                          <Button
+                            key={r}
+                            type="button"
+                            variant={role === r ? "default" : "outline"}
+                            aria-pressed={role === r}
+                            onClick={() => setRole(r)}
+                            className="capitalize"
+                          >
+                            {r}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
 
                     {formError && <p className="text-sm text-destructive">{formError}</p>}
 

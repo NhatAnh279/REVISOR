@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { clearClassroomContext } from "@/lib/classroom";
 import { SiteHeader } from "@/components/site-header";
 import { supabase } from "@/lib/supabase";
 import { generateQuiz } from "@/lib/api";
@@ -168,6 +169,7 @@ export default function CreateExamPage() {
       localStorage.removeItem("revisor_result");
       localStorage.removeItem("revisor_results");
       clearCurrentQuiz();
+      clearClassroomContext();
 
       router.push("/quiz");
     } catch (err) {
