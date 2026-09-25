@@ -93,6 +93,13 @@ function TopicBadges({ topics, variant }) {
   );
 }
 
+// Red below 60, amber 60-75, green above 75.
+function scoreColor(score) {
+  if (score < 60) return "text-destructive";
+  if (score <= 75) return "text-warning";
+  return "text-success";
+}
+
 function pct(correct, total) {
   return total === 0 ? null : Math.round((correct / total) * 100);
 }
@@ -392,21 +399,37 @@ export default function ClassroomDashboardPage() {
                   {insightsError && <p className="text-sm text-destructive">{insightsError}</p>}
 
                   {insights && (
-                    <div className="space-y-3 text-sm">
-                      <p className="whitespace-pre-line text-foreground">
-                        {insights.teaching_recommendations}
-                      </p>
-                      {insights.student_insights
-                        .filter((s) => s.recommendation)
-                        .map((s) => (
-                          <div key={s.student_id}>
-                            <p className="font-semibold text-foreground">
-                              {state.names[s.student_id] || studentLabel(s.student_id)} (
-                              {Math.round(s.score)}%)
-                            </p>
-                            <p className="text-muted-foreground">{s.recommendation}</p>
-                          </div>
-                        ))}
+                    <div className="space-y-4">
+                      <div className="rounded-[12px] border-2 border-primary bg-[#F5F3FF] p-5 text-slate-800 dark:bg-primary/10 dark:text-foreground">
+                        <h3 className="mb-2 text-xl font-extrabold text-primary">
+                          {"\u{1F4CA} Class Overview"}
+                        </h3>
+                        <p className="whitespace-pre-line text-base leading-relaxed">
+                          {insights.teaching_recommendations}
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        {insights.student_insights
+                          .filter((s) => s.recommendation)
+                          .map((s) => {
+                            const score = Math.round(s.score);
+                            return (
+                              <div
+                                key={s.student_id}
+                                className="rounded-[12px] border border-border p-4"
+                              >
+                                <p className="mb-1 flex items-baseline justify-between gap-2 font-bold text-foreground">
+                                  <span className="truncate">
+                                    {state.names[s.student_id] || studentLabel(s.student_id)}
+                                  </span>
+                                  <span className={scoreColor(score)}>{score}%</span>
+                                </p>
+                                <p className="text-sm text-muted-foreground">{s.recommendation}</p>
+                              </div>
+                            );
+                          })}
+                      </div>
                     </div>
                   )}
                 </CardContent>
