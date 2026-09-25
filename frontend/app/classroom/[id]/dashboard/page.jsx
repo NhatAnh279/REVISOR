@@ -9,6 +9,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -37,6 +39,46 @@ import {
 const PERSONALIZED_QUIZ_SIZE = 10;
 // Distribution buckets: low / mid / high, matching the 0-50 / 50-70 / 70-100 split.
 const BUCKET_COLORS = ["var(--destructive)", "var(--warning)", "var(--success)"];
+const PASS_MARK = 70;
+const MAX_TOPIC_LABEL = 15;
+
+function truncate(text, max = MAX_TOPIC_LABEL) {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+// X-axis tick rotated 45deg so long topic names stay readable.
+function AngledTick({ x, y, payload }) {
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text dy={8} textAnchor="end" transform="rotate(-45)" fontSize={11} fill="currentColor">
+        {truncate(String(payload.value))}
+      </text>
+    </g>
+  );
+}
+
+// Shows the full (untruncated) topic name.
+function TopicTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const { topic, average } = payload[0].payload;
+  return (
+    <div className="rounded-md border border-border bg-card px-3 py-2 text-xs shadow-md">
+      <p className="font-semibold text-foreground">{topic}</p>
+      <p className="text-muted-foreground">Average: {average}%</p>
+    </div>
+  );
+}
+
+function TrendTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const { title, average } = payload[0].payload;
+  return (
+    <div className="rounded-md border border-border bg-card px-3 py-2 text-xs shadow-md">
+      <p className="text-foreground">Assignment: {title}</p>
+      <p className="text-muted-foreground">Average: {average}%</p>
+    </div>
+  );
+}
 
 // The backend builds a personalized quiz from lecture slides, but an
 // assignment only stores its generated questions. Each question (with its
@@ -109,7 +151,7 @@ export default function ClassroomDashboardPage() {
   }, [id]);
 
   const summary = useMemo(
-    () => (data ? summarizeAttempts(data.attempts, data.studentIds) : null),
+    () => (data ? summarizeAttempts(data.attempts, data.studentIds, data.assignments) : null),
     [data]
   );
 
@@ -178,10 +220,22 @@ export default function ClassroomDashboardPage() {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={summary.topicAverages}>
                         <CartesianGrid vertical={false} stroke="var(--border)" />
-                        <XAxis dataKey="topic" tick={{ fontSize: 11 }} interval={0} />
+                        <XAxis
+                          dataKey="topic"
+                          interval={0}
+                          height={70}
+                          tick={<AngledTick />}
+                        />
                         <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
-                        <Tooltip formatter={(v) => [`${v}%`, "Average"]} />
-                        <Bar dataKey="average" fill="var(--chart-1)" radius={[6, 6, 0, 0]} />
+                        <Tooltip content={<TopicTooltip />} cursor={{ fill: "var(--muted)" }} />
+                        <Bar dataKey="average" radius={[6, 6, 0, 0]}>
+                          {summary.topicAverages.map((entry) => (
+                            <Cell
+                              key={entry.topic}
+                              fill={entry.average >= PASS_MARK ? "var(--success)" : "var(--destructive)"}
+                            />
+                          ))}
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   )}
@@ -203,6 +257,30 @@ export default function ClassroomDashboardPage() {
                   </ResponsiveContainer>
                 </ChartCard>
               </div>
+
+              <ChartCard title="Class Average Over Time">
+                {summary.trend.length < 2 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Complete more assignments to see trends
+                  </p>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={summary.trend}>
+                      <CartesianGrid vertical={false} stroke="var(--border)" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                      <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 11 }} />
+                      <Tooltip content={<TrendTooltip />} />
+                      <Line
+                        type="monotone"
+                        dataKey="average"
+                        stroke="var(--chart-1)"
+                        strokeWidth={2}
+                        dot={{ r: 4 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </ChartCard>
 
               <Card>
                 <CardHeader>

@@ -78,7 +78,7 @@ function topicStats(attempts) {
 
 // Per-student score (% correct across all their attempts) plus weak/strong
 // topics, and the class-wide per-topic averages and score distribution.
-export function summarizeAttempts(attempts, studentIds) {
+export function summarizeAttempts(attempts, studentIds, assignments = []) {
   const byStudent = {};
   for (const id of studentIds) byStudent[id] = [];
   for (const a of attempts) (byStudent[a.student_id] ??= []).push(a);
@@ -112,7 +112,31 @@ export function summarizeAttempts(attempts, studentIds) {
     ? Math.round(scored.reduce((sum, s) => sum + s.score, 0) / scored.length)
     : null;
 
-  return { students, topicAverages, distribution, classAverage };
+  return { students, topicAverages, distribution, classAverage, trend: classAverageTrend(attempts, assignments) };
+}
+
+// One point per assignment that has attempts, oldest first: the mean of each
+// participating student's score on that assignment (same definition as the
+// overall class average).
+function classAverageTrend(attempts, assignments) {
+  return [...assignments]
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+    .map((assignment) => {
+      const byStudent = {};
+      for (const a of attempts) {
+        if (a.assignment_id === assignment.id) (byStudent[a.student_id] ??= []).push(a);
+      }
+      const scores = Object.values(byStudent).map(
+        (rows) => (rows.filter((r) => r.is_correct).length / rows.length) * 100
+      );
+      if (scores.length === 0) return null;
+      return {
+        title: assignment.title,
+        date: formatDate(assignment.created_at),
+        average: Math.round(scores.reduce((sum, v) => sum + v, 0) / scores.length),
+      };
+    })
+    .filter(Boolean);
 }
 
 // Everything the teacher-side pages read straight from Supabase (RLS scopes
