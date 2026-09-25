@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from routers.auth import CurrentUser, get_current_user
 from routers.classroom import (
     compute_topic_stats,
+    execute,
     get_assignment,
     require_teacher,
     score_percent,
@@ -16,7 +17,7 @@ from routers.classroom import (
 )
 from routers.generate import SlideInput, build_lecture_text
 
-router = APIRouter(prefix="/insights")
+router = APIRouter(prefix="/insights", tags=["insights"])
 client = anthropic.Anthropic()
 
 MODEL = "claude-haiku-4-5"
@@ -51,9 +52,10 @@ def class_insights(body: ClassInsightsRequest, user: CurrentUser = Depends(get_c
     assignment = get_assignment(user, body.assignment_id)
     require_teacher(user, assignment["classroom_id"])
 
-    attempts = (
-        user.db.table("student_attempts").select("*").eq("assignment_id", body.assignment_id).execute().data
-    )
+    attempts = execute(
+        user.db.table("student_attempts").select("*").eq("assignment_id", body.assignment_id),
+        "load attempts",
+    ).data
     if not attempts:
         raise HTTPException(status_code=404, detail="No attempts recorded for this assignment")
 
@@ -137,19 +139,19 @@ def personalized_quiz(body: PersonalizedQuizRequest, user: CurrentUser = Depends
 
     assignment_ids = [
         a["id"]
-        for a in user.db.table("class_assignments")
-        .select("id")
-        .eq("classroom_id", body.classroom_id)
-        .execute()
-        .data
+        for a in execute(
+            user.db.table("class_assignments").select("id").eq("classroom_id", body.classroom_id),
+            "list assignments",
+        ).data
     ]
     attempts = (
-        user.db.table("student_attempts")
-        .select("topic,is_correct")
-        .eq("student_id", body.student_id)
-        .in_("assignment_id", assignment_ids)
-        .execute()
-        .data
+        execute(
+            user.db.table("student_attempts")
+            .select("topic,is_correct")
+            .eq("student_id", body.student_id)
+            .in_("assignment_id", assignment_ids),
+            "load attempts",
+        ).data
         if assignment_ids
         else []
     )

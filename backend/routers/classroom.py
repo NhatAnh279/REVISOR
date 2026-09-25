@@ -1,3 +1,4 @@
+import logging
 import secrets
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -7,7 +8,8 @@ from pydantic import BaseModel
 
 from routers.auth import CurrentUser, get_current_user
 
-router = APIRouter(prefix="/classroom")
+router = APIRouter(prefix="/classroom", tags=["classroom"])
+logger = logging.getLogger(__name__)
 
 # Unambiguous characters only (no 0/O, 1/I).
 _JOIN_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -68,20 +70,34 @@ def score_percent(attempts: List[dict]) -> float:
     return round(sum(1 for a in attempts if a["is_correct"]) / len(attempts) * 100, 2)
 
 
+def execute(query, action: str):
+    """Run a Supabase query; turn any failure into an HTTPException.
+
+    An uncaught exception becomes a bare 500 that bypasses CORSMiddleware, so the
+    browser reports it as a CORS error and hides the real cause.
+    """
+    try:
+        return query.execute()
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Supabase query failed: %s", action)
+        raise HTTPException(status_code=502, detail=f"Database error while trying to {action}")
+
+
 def require_teacher(user: CurrentUser, classroom_id: str) -> None:
-    res = (
-        user.db.table("classrooms")
-        .select("id")
-        .eq("id", classroom_id)
-        .eq("teacher_id", user.id)
-        .execute()
+    res = execute(
+        user.db.table("classrooms").select("id").eq("id", classroom_id).eq("teacher_id", user.id),
+        "verify classroom ownership",
     )
     if not res.data:
         raise HTTPException(status_code=403, detail="Teacher access required")
 
 
 def get_assignment(user: CurrentUser, assignment_id: str) -> dict:
-    res = user.db.table("class_assignments").select("*").eq("id", assignment_id).execute()
+    res = execute(
+        user.db.table("class_assignments").select("*").eq("id", assignment_id), "load assignment"
+    )
     if not res.data:
         raise HTTPException(status_code=404, detail="Assignment not found")
     return res.data[0]
@@ -106,7 +122,8 @@ def create_classroom(body: CreateClassroom, user: CurrentUser = Depends(get_curr
         except Exception as e:
             if "duplicate" in str(e).lower() or "23505" in str(e):
                 continue
-            raise HTTPException(status_code=500, detail="Failed to create classroom")
+            logger.exception("Creating classroom failed")
+            raise HTTPException(status_code=502, detail="Database error while trying to create classroom")
         row = res.data[0]
         return {"id": row["id"], "name": row["name"], "join_code": row["join_code"]}
     raise HTTPException(status_code=500, detail="Could not generate a unique join code")
@@ -119,7 +136,8 @@ def join_classroom(body: JoinClassroom, user: CurrentUser = Depends(get_current_
     except Exception as e:
         if "classroom_not_found" in str(e):
             raise HTTPException(status_code=404, detail="Invalid join code")
-        raise HTTPException(status_code=500, detail="Failed to join classroom")
+        logger.exception("Joining classroom failed")
+        raise HTTPException(status_code=502, detail="Database error while trying to join classroom")
     row = res.data[0] if isinstance(res.data, list) else res.data
     return {"classroom_id": row["classroom_id"], "classroom_name": row["classroom_name"]}
 
@@ -127,13 +145,23 @@ def join_classroom(body: JoinClassroom, user: CurrentUser = Depends(get_current_
 @router.get("/my-classrooms")
 def my_classrooms(user: CurrentUser = Depends(get_current_user)):
     # A user can be both: teacher of some classrooms, student in others.
-    teaching = user.db.table("classrooms").select("*").eq("teacher_id", user.id).execute().data
+    teaching = execute(
+        user.db.table("classrooms").select("*").eq("teacher_id", user.id), "list classrooms"
+    ).data
     enrolled_ids = [
         e["classroom_id"]
-        for e in user.db.table("enrollments").select("classroom_id").eq("student_id", user.id).execute().data
+        for e in execute(
+            user.db.table("enrollments").select("classroom_id").eq("student_id", user.id),
+            "list enrollments",
+        ).data
     ]
     enrolled = (
-        user.db.table("classrooms").select("id,name,subject,teacher_id").in_("id", enrolled_ids).execute().data
+        execute(
+            user.db.table("classrooms")
+            .select("id,name,subject,teacher_id")
+            .in_("id", enrolled_ids),
+            "list enrolled classrooms",
+        ).data
         if enrolled_ids
         else []
     )
@@ -143,17 +171,16 @@ def my_classrooms(user: CurrentUser = Depends(get_current_user)):
 @router.post("/assign")
 def assign(body: AssignRequest, user: CurrentUser = Depends(get_current_user)):
     require_teacher(user, body.classroom_id)
-    res = (
-        user.db.table("class_assignments")
-        .insert(
+    res = execute(
+        user.db.table("class_assignments").insert(
             {
                 "classroom_id": body.classroom_id,
                 "title": body.title,
                 "questions": body.questions,
                 "due_date": body.due_date,
             }
-        )
-        .execute()
+        ),
+        "create assignment",
     )
     return {"assignment_id": res.data[0]["id"]}
 
@@ -161,12 +188,12 @@ def assign(body: AssignRequest, user: CurrentUser = Depends(get_current_user)):
 @router.get("/{classroom_id}/assignments")
 def list_assignments(classroom_id: str, user: CurrentUser = Depends(get_current_user)):
     # RLS limits this to the classroom's teacher and enrolled students.
-    res = (
+    res = execute(
         user.db.table("class_assignments")
         .select("*")
         .eq("classroom_id", classroom_id)
-        .order("created_at", desc=True)
-        .execute()
+        .order("created_at", desc=True),
+        "list assignments",
     )
     return res.data
 
@@ -174,12 +201,11 @@ def list_assignments(classroom_id: str, user: CurrentUser = Depends(get_current_
 @router.post("/attempt")
 def record_attempt(body: AttemptRequest, user: CurrentUser = Depends(get_current_user)):
     try:
-        res = (
-            user.db.table("student_attempts")
-            .insert({**body.model_dump(), "student_id": user.id})
-            .execute()
-        )
+        res = user.db.table("student_attempts").insert(
+            {**body.model_dump(), "student_id": user.id}
+        ).execute()
     except Exception:
+        logger.exception("Recording attempt failed")
         raise HTTPException(status_code=403, detail="Not enrolled in this assignment's classroom")
     return {"id": res.data[0]["id"]}
 
@@ -189,9 +215,10 @@ def assignment_results(assignment_id: str, user: CurrentUser = Depends(get_curre
     assignment = get_assignment(user, assignment_id)
     require_teacher(user, assignment["classroom_id"])
 
-    attempts = (
-        user.db.table("student_attempts").select("*").eq("assignment_id", assignment_id).execute().data
-    )
+    attempts = execute(
+        user.db.table("student_attempts").select("*").eq("assignment_id", assignment_id),
+        "load attempts",
+    ).data
     by_student: Dict[str, List[dict]] = defaultdict(list)
     for a in attempts:
         by_student[a["student_id"]].append(a)
