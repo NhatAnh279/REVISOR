@@ -200,6 +200,19 @@ export const generatePersonalizedQuiz = ({ classroomId, studentId, slides, numQu
       num_questions: numQuestions,
     },
   });
+// Generates (and saves) a week-by-week study roadmap; resolves to the roadmaps row.
+export const createRoadmap = ({ subjectId, examDate, hoursPerDay, pace, lectureIds, startDate }) =>
+  authRequest("/roadmap", {
+    method: "POST",
+    body: {
+      subject_id: subjectId,
+      exam_date: examDate,
+      hours_per_day: hoursPerDay,
+      pace,
+      lecture_ids: lectureIds,
+      start_date: startDate,
+    },
+  });
 export const listAssignments = (classroomId) =>
   authRequest(`/classroom/${classroomId}/assignments`);
 export const getAssignmentResults = (assignmentId) =>

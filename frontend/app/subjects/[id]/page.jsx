@@ -25,6 +25,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SiteHeader } from "@/components/site-header";
+import { ExamWarningBanner } from "@/components/roadmap/exam-countdown";
+import { RoadmapSection } from "@/components/roadmap/roadmap-section";
 import { supabase } from "@/lib/supabase";
 import { uploadSlides } from "@/lib/api";
 import { getFileError } from "@/lib/file-validation";
@@ -62,6 +64,14 @@ function fetchSubjectData(subjectId) {
       .from("quiz_history")
       .select("exam_id, date, score, total, score_percent")
       .eq("subject_id", subjectId),
+    // Latest roadmap only. A failure here (e.g. table not created yet) is
+    // ignored by the callers so the rest of the page still loads.
+    supabase
+      .from("roadmaps")
+      .select("*")
+      .eq("subject_id", subjectId)
+      .order("created_at", { ascending: false })
+      .limit(1),
   ]);
 }
 
@@ -74,6 +84,7 @@ export default function SubjectDetailPage() {
   const [subject, setSubject] = useState(null);
   const [lectures, setLectures] = useState([]);
   const [exams, setExams] = useState([]);
+  const [roadmap, setRoadmap] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -86,7 +97,8 @@ export default function SubjectDetailPage() {
   const [uploading, setUploading] = useState(false);
 
   const loadSubject = useCallback(async () => {
-    const [subjectRes, lecturesRes, examsRes, historyRes] = await fetchSubjectData(subjectId);
+    const [subjectRes, lecturesRes, examsRes, historyRes, roadmapRes] =
+      await fetchSubjectData(subjectId);
 
     if (subjectRes.error) {
       setError(subjectRes.error.message);
@@ -98,23 +110,27 @@ export default function SubjectDetailPage() {
     setSubject(subjectRes.data);
     setLectures(lecturesRes.data || []);
     setExams(attachLatestScore(examsRes.data || [], historyRes.data || []));
+    setRoadmap(roadmapRes?.data?.[0] ?? null);
     setLoading(false);
   }, [subjectId]);
 
   useEffect(() => {
     let cancelled = false;
-    fetchSubjectData(subjectId).then(([subjectRes, lecturesRes, examsRes, historyRes]) => {
-      if (cancelled) return;
-      if (subjectRes.error) {
-        setError(subjectRes.error.message);
-      } else {
-        setError("");
-        setSubject(subjectRes.data);
-        setLectures(lecturesRes.data || []);
-        setExams(attachLatestScore(examsRes.data || [], historyRes.data || []));
+    fetchSubjectData(subjectId).then(
+      ([subjectRes, lecturesRes, examsRes, historyRes, roadmapRes]) => {
+        if (cancelled) return;
+        if (subjectRes.error) {
+          setError(subjectRes.error.message);
+        } else {
+          setError("");
+          setSubject(subjectRes.data);
+          setLectures(lecturesRes.data || []);
+          setExams(attachLatestScore(examsRes.data || [], historyRes.data || []));
+          setRoadmap(roadmapRes?.data?.[0] ?? null);
+        }
+        setLoading(false);
       }
-      setLoading(false);
-    });
+    );
     return () => {
       cancelled = true;
     };
@@ -228,6 +244,10 @@ export default function SubjectDetailPage() {
 
       <main className="flex-1 animate-fade-in px-4 py-10">
         <div className="mx-auto w-full max-w-4xl space-y-6">
+          {roadmap && (
+            <ExamWarningBanner examDate={roadmap.exam_date} subjectName={subject.name} />
+          )}
+
           <div className="space-y-3">
             <button
               type="button"
@@ -347,6 +367,13 @@ export default function SubjectDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          <RoadmapSection
+            subjectId={subjectId}
+            lectures={lectures}
+            roadmap={roadmap}
+            onCreated={setRoadmap}
+          />
         </div>
       </main>
 
