@@ -1,6 +1,6 @@
 import json
 from collections import defaultdict
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +15,8 @@ from routers.classroom import (
     score_percent,
     weak_topics_from,
 )
-from routers.generate import SlideInput, build_lecture_text
+from routers.generate import SlideInput
+from routers.quiz_gen import generate_questions
 
 router = APIRouter(prefix="/insights", tags=["insights"])
 client = anthropic.Anthropic()
@@ -74,18 +75,6 @@ class PersonalizedQuizRequest(BaseModel):
     classroom_id: str
     slides: List[SlideInput]
     num_questions: int = 10
-
-
-class GeneratedQuestion(BaseModel):
-    question: str
-    type: Literal["mcq", "short_answer"]
-    options: Optional[List[str]] = None
-    answer: str
-    topic: str
-
-
-class QuizResult(BaseModel):
-    questions: List[GeneratedQuestion]
 
 
 @router.post("/class")
@@ -217,42 +206,9 @@ def personalized_quiz(body: PersonalizedQuizRequest, user: CurrentUser = Depends
         if assignment_ids
         else []
     )
-    weak = weak_topics_from(attempts)
-
-    n_weak = round(body.num_questions * 0.6) if weak else 0
-    n_general = body.num_questions - n_weak
-    focus = (
-        f"Create {n_weak} questions on these weak topics (spread across them): "
-        f"{', '.join(weak)}. Create the remaining {n_general} as general questions covering "
-        "other parts of the lecture."
-        if weak
-        else f"The student has no weak-topic history; create all {n_general} as general questions."
-    )
-
     try:
-        response = client.messages.parse(
-            model=MODEL,
-            max_tokens=4096,
-            system=(
-                "You create review questions from lecture slides. Every mcq has exactly 4 options "
-                "and 'answer' is the correct option's text verbatim. short_answer questions have "
-                "null options and a concise model answer. Set 'topic' to a short label. Base "
-                "questions strictly on the slides. Write in English."
-            ),
-            messages=[
-                {
-                    "role": "user",
-                    "content": f'Lecture content:\n"""\n{build_lecture_text(slides)}\n"""\n\n{focus}',
-                }
-            ],
-            output_format=QuizResult,
-        )
+        questions = generate_questions(slides, weak_topics_from(attempts), body.num_questions)
     except anthropic.APIError:
         raise HTTPException(status_code=503, detail="AI service unavailable")
 
-    return {
-        "questions": [
-            {"id": f"q{i}", **q.model_dump()}
-            for i, q in enumerate(response.parsed_output.questions, start=1)
-        ]
-    }
+    return {"questions": questions}

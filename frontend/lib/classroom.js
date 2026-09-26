@@ -139,6 +139,33 @@ function classAverageTrend(attempts, assignments) {
     .filter(Boolean);
 }
 
+// Personalized assignments give some students their own question set. When the
+// signed-in user has one, it replaces the assignment's base `questions`, so the
+// assignment list, quiz start and completion check all use the student's quiz
+// without knowing about personalization. Teachers have no rows of their own, so
+// they keep seeing the base quiz.
+async function withMyPersonalizedQuestions(assignments) {
+  if (assignments.length === 0) return assignments;
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session) return assignments;
+
+  const { data, error } = await supabase
+    .from("assignment_student_questions")
+    .select("assignment_id,questions")
+    .eq("student_id", session.user.id)
+    .in("assignment_id", assignments.map((a) => a.id));
+  // A failure here (e.g. migration not applied yet) must not break the page:
+  // everyone simply gets the base quiz.
+  if (error || !data?.length) return assignments;
+
+  const mine = new Map(data.map((row) => [row.assignment_id, row.questions]));
+  return assignments.map((a) =>
+    mine.has(a.id) ? { ...a, questions: mine.get(a.id), personalized_for_me: true } : a
+  );
+}
+
 // Everything the teacher-side pages read straight from Supabase (RLS scopes
 // each query to what the signed-in user may see).
 export async function fetchClassroomData(classroomId) {
@@ -153,7 +180,8 @@ export async function fetchClassroomData(classroomId) {
   ]);
   if (classroomRes.error) throw new Error(classroomRes.error.message);
   if (assignmentsRes.error) throw new Error(assignmentsRes.error.message);
-  const assignments = assignmentsRes.data || [];
+  const baseAssignments = assignmentsRes.data || [];
+  const assignments = await withMyPersonalizedQuestions(baseAssignments);
 
   let attempts = [];
   if (assignments.length > 0) {

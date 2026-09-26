@@ -159,10 +159,32 @@ export const createClassroom = ({ name, subject }) =>
   authRequest("/classroom/create", { method: "POST", body: { name, subject } });
 export const joinClassroom = (joinCode) =>
   authRequest("/classroom/join", { method: "POST", body: { join_code: joinCode } });
-export const createAssignment = ({ classroomId, title, dueDate, questions }) =>
+// With `personalized`, the backend also generates a quiz per student (60% on
+// that student's weak topics) from `slides`; `questions` remains the base quiz.
+export const createAssignment = ({
+  classroomId,
+  title,
+  dueDate,
+  questions,
+  personalized = false,
+  slides,
+  numQuestions,
+  difficulty,
+}) =>
   authRequest("/classroom/assign", {
     method: "POST",
-    body: { classroom_id: classroomId, title, due_date: dueDate || null, questions },
+    body: {
+      classroom_id: classroomId,
+      title,
+      due_date: dueDate || null,
+      questions,
+      ...(personalized && {
+        personalized: true,
+        slides,
+        num_questions: numQuestions,
+        difficulty,
+      }),
+    },
   });
 export const recordAttempt = (attempt) =>
   authRequest("/classroom/attempt", { method: "POST", body: attempt });

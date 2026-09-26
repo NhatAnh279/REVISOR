@@ -1,15 +1,21 @@
 import logging
 import secrets
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from routers.auth import CurrentUser, get_current_user
+from routers.generate import SlideInput
+from routers.quiz_gen import generate_questions
 
 router = APIRouter(prefix="/classroom", tags=["classroom"])
 logger = logging.getLogger(__name__)
+
+# Concurrent Claude calls when generating one quiz per student.
+PERSONALIZE_WORKERS = 6
 
 # Unambiguous characters only (no 0/O, 1/I).
 _JOIN_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -29,6 +35,13 @@ class AssignRequest(BaseModel):
     title: str
     questions: List[Dict[str, Any]]
     due_date: Optional[str] = None
+    # Personalized mode: also generate a quiz per student, weighted 60% toward that
+    # student's weak topics. `questions` stays as the base quiz (used for students
+    # without attempt history). slides/num_questions/difficulty drive the generation.
+    personalized: bool = False
+    slides: List[SlideInput] = []
+    num_questions: Optional[int] = None
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 
 class AttemptRequest(BaseModel):
@@ -168,21 +181,120 @@ def my_classrooms(user: CurrentUser = Depends(get_current_user)):
     return {"teaching": teaching, "enrolled": enrolled}
 
 
+def build_personalized_sets(user: CurrentUser, body: AssignRequest):
+    """Generate a quiz per enrolled student that has weak topics.
+
+    Returns (rows, fallback_ids, general_count). `rows` are assignment_student_questions
+    rows minus assignment_id. Students with no attempt history get the base quiz
+    (`general_count`); students whose generation failed also fall back to it
+    (`fallback_ids`), so one Claude error never blocks the assignment.
+    """
+    classroom_id = body.classroom_id
+    student_ids = [
+        e["student_id"]
+        for e in execute(
+            user.db.table("enrollments").select("student_id").eq("classroom_id", classroom_id),
+            "list enrollments",
+        ).data
+    ]
+    assignment_ids = [
+        a["id"]
+        for a in execute(
+            user.db.table("class_assignments").select("id").eq("classroom_id", classroom_id),
+            "list assignments",
+        ).data
+    ]
+    attempts = (
+        execute(
+            user.db.table("student_attempts")
+            .select("student_id,topic,is_correct")
+            .in_("assignment_id", assignment_ids),
+            "load attempts",
+        ).data
+        if assignment_ids
+        else []
+    )
+
+    by_student: Dict[str, List[dict]] = defaultdict(list)
+    for a in attempts:
+        by_student[a["student_id"]].append(a)
+    targets = {
+        sid: weak
+        for sid in student_ids
+        if (weak := weak_topics_from(by_student.get(sid, [])))
+    }
+
+    slides = [s for s in body.slides if s.text.strip()]
+    num_questions = body.num_questions or len(body.questions)
+
+    def generate_for(item):
+        sid, weak = item
+        try:
+            questions = generate_questions(slides, weak, num_questions, body.difficulty)
+            return sid, weak, questions or None
+        except Exception:
+            logger.exception("Personalized quiz generation failed for student %s", sid)
+            return sid, weak, None
+
+    with ThreadPoolExecutor(max_workers=PERSONALIZE_WORKERS) as pool:
+        results = list(pool.map(generate_for, targets.items()))
+
+    rows = [
+        {"student_id": sid, "weak_topics": weak, "questions": questions}
+        for sid, weak, questions in results
+        if questions
+    ]
+    fallback_ids = [sid for sid, _, questions in results if not questions]
+    return rows, fallback_ids, len(student_ids) - len(targets)
+
+
 @router.post("/assign")
 def assign(body: AssignRequest, user: CurrentUser = Depends(get_current_user)):
     require_teacher(user, body.classroom_id)
-    res = execute(
-        user.db.table("class_assignments").insert(
-            {
-                "classroom_id": body.classroom_id,
-                "title": body.title,
-                "questions": body.questions,
-                "due_date": body.due_date,
-            }
-        ),
-        "create assignment",
-    )
-    return {"assignment_id": res.data[0]["id"]}
+
+    rows: List[dict] = []
+    fallback_ids: List[str] = []
+    general_count = 0
+    if body.personalized:
+        if not any(s.text.strip() for s in body.slides):
+            raise HTTPException(status_code=400, detail="Slides are required for personalized quizzes")
+        if not 1 <= (body.num_questions or len(body.questions)) <= 30:
+            raise HTTPException(status_code=400, detail="num_questions must be between 1 and 30")
+        # Generate before inserting anything, so a failure leaves no half-created assignment.
+        rows, fallback_ids, general_count = build_personalized_sets(user, body)
+
+    payload = {
+        "classroom_id": body.classroom_id,
+        "title": body.title,
+        "questions": body.questions,
+        "due_date": body.due_date,
+    }
+    if body.personalized:  # only sent when set, so plain assignments never depend on the column
+        payload["personalized"] = True
+    res = execute(user.db.table("class_assignments").insert(payload), "create assignment")
+    assignment_id = res.data[0]["id"]
+
+    if rows:
+        try:
+            execute(
+                user.db.table("assignment_student_questions").insert(
+                    [{**row, "assignment_id": assignment_id} for row in rows]
+                ),
+                "save personalized quizzes",
+            )
+        except HTTPException:
+            try:  # don't leave an assignment whose personalization silently failed
+                user.db.table("class_assignments").delete().eq("id", assignment_id).execute()
+            except Exception:
+                logger.exception("Could not roll back assignment %s", assignment_id)
+            raise
+
+    return {
+        "assignment_id": assignment_id,
+        "personalized_count": len(rows),
+        "general_count": general_count,
+        "fallback_student_ids": fallback_ids,
+    }
 
 
 @router.get("/{classroom_id}/assignments")

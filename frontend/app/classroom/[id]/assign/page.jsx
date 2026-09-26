@@ -3,8 +3,9 @@
 import { useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, FileUp, Loader2 } from "lucide-react";
+import { ArrowLeft, FileText, FileUp, Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -25,11 +26,28 @@ import { SiteHeader } from "@/components/site-header";
 import { createAssignment, streamGenerateQuiz, uploadSlides } from "@/lib/api";
 import { getFileError } from "@/lib/file-validation";
 
+const MAX_FILES = 10;
+
+const fileKey = (f) => `${f.name}:${f.size}:${f.lastModified}`;
+const baseName = (name) => name.replace(/\.(pdf|pptx)$/i, "");
+
+// Each file is numbered from slide 1, so combine them into one lecture with
+// continuous slide numbers.
+function mergeSlides(slideLists) {
+  return slideLists.flat().map((slide, i) => ({ ...slide, slide_number: i + 1 }));
+}
+
 export default function CreateAssignmentPage() {
   const { id: classroomId } = useParams();
   const router = useRouter();
   const inputRef = useRef(null);
-  const [file, setFile] = useState(null);
+  // { key, file, slides } - `slides` is filled once the file has been uploaded, so
+  // regenerating does not re-upload files that were already read.
+  const [files, setFiles] = useState([]);
+  const [personalize, setPersonalize] = useState(false);
+  // The merged slides the current questions were generated from (sent again when
+  // personalizing, so each student's quiz is built from the same lecture).
+  const [slides, setSlides] = useState([]);
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [numQuestions, setNumQuestions] = useState("10");
@@ -41,28 +59,60 @@ export default function CreateAssignmentPage() {
 
   const generating = Boolean(step);
 
-  function handleFileSelected(selected) {
-    if (!selected) return;
-    const fileError = getFileError(selected);
-    if (fileError) {
-      toast.error(fileError);
-      return;
+  function handleFilesSelected(selected) {
+    const incoming = [];
+    const known = new Set(files.map((f) => f.key));
+    for (const file of selected) {
+      const fileError = getFileError(file);
+      if (fileError) {
+        toast.error(`${file.name}: ${fileError}`);
+        continue;
+      }
+      const key = fileKey(file);
+      if (known.has(key)) continue; // same file picked twice
+      if (files.length + incoming.length >= MAX_FILES) {
+        toast.error(`You can add up to ${MAX_FILES} files`);
+        break;
+      }
+      known.add(key);
+      incoming.push({ key, file, slides: null });
     }
-    setFile(selected);
+    if (incoming.length === 0) return;
+    setFiles((prev) => [...prev, ...incoming]);
+    setQuestions([]); // the questions no longer match the lecture
+    setError("");
+  }
+
+  function handleRemoveFile(key) {
+    setFiles((prev) => prev.filter((f) => f.key !== key));
     setQuestions([]);
     setError("");
   }
 
   async function handleGenerate() {
-    if (!file) return;
+    if (files.length === 0) return;
     setError("");
     setQuestions([]);
     try {
-      setStep("Analysing slides...");
-      const { slides } = await uploadSlides(file);
-      if (!slides || slides.length === 0) {
-        throw new Error("No readable text found in this file.");
-      }
+      setStep(files.length === 1 ? "Analysing slides..." : `Analysing ${files.length} files...`);
+      const pending = files.filter((f) => !f.slides);
+      const uploaded = await Promise.all(
+        pending.map(async (f) => {
+          try {
+            const { slides: fileSlides } = await uploadSlides(f.file);
+            if (!fileSlides || fileSlides.length === 0) throw new Error("No readable text found");
+            return [f.key, fileSlides];
+          } catch (err) {
+            throw new Error(`${f.file.name}: ${err.message || "could not be read"}`);
+          }
+        })
+      );
+      const slidesByKey = new Map(uploaded);
+      setFiles((prev) =>
+        prev.map((f) => (slidesByKey.has(f.key) ? { ...f, slides: slidesByKey.get(f.key) } : f))
+      );
+      const slides = mergeSlides(files.map((f) => f.slides ?? slidesByKey.get(f.key)));
+      setSlides(slides);
 
       const generated = [];
       setStep(`Generating question 0/${numQuestions}...`);
@@ -79,7 +129,10 @@ export default function CreateAssignmentPage() {
       if (generated.length === 0) {
         throw new Error("Failed to generate questions. Please try again.");
       }
-      if (!title.trim()) setTitle(file.name.replace(/\.(pdf|pptx)$/i, ""));
+      if (!title.trim()) {
+        const first = baseName(files[0].file.name);
+        setTitle(files.length === 1 ? first : `${first} (+${files.length - 1} more)`);
+      }
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
     } finally {
@@ -95,15 +148,28 @@ export default function CreateAssignmentPage() {
     setSubmitting(true);
     setError("");
     try {
-      await createAssignment({
+      const result = await createAssignment({
         classroomId,
         title: title.trim(),
+        personalized: personalize,
+        slides,
+        numQuestions: Number(numQuestions),
+        difficulty,
         // <input type="date"> yields YYYY-MM-DD; end of that day, in the
         // teacher's timezone, is when the assignment is actually due.
         dueDate: dueDate ? new Date(`${dueDate}T23:59:59`).toISOString() : null,
         questions,
       });
-      toast.success("Assignment created ✓");
+      toast.success(
+        personalize && result.personalized_count > 0
+          ? `Assignment created ✓ - ${result.personalized_count} personalized quiz${result.personalized_count === 1 ? "" : "zes"}`
+          : "Assignment created ✓"
+      );
+      if (result.fallback_student_ids?.length > 0) {
+        toast.warning(
+          `${result.fallback_student_ids.length} student(s) could not be personalized and will get the standard quiz.`
+        );
+      }
       router.push(`/classroom/${classroomId}`);
     } catch (err) {
       setError(err.message || "Could not create the assignment.");
@@ -132,7 +198,7 @@ export default function CreateAssignmentPage() {
             <CardHeader>
               <CardTitle className="text-lg">1. Lecture</CardTitle>
               <CardDescription>
-                Upload a lecture (PDF or PPTX) to generate the questions.
+                Upload one or more lectures (PDF or PPTX) to generate the questions.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -140,21 +206,49 @@ export default function CreateAssignmentPage() {
                 ref={inputRef}
                 type="file"
                 accept=".pdf,.pptx"
+                multiple
                 className="hidden"
                 onChange={(e) => {
-                  handleFileSelected(e.target.files?.[0]);
+                  handleFilesSelected(Array.from(e.target.files ?? []));
                   e.target.value = "";
                 }}
               />
+              {files.length > 0 && (
+                <ul className="space-y-2">
+                  {files.map(({ key, file }) => (
+                    <li
+                      key={key}
+                      className="flex items-center gap-2 rounded-[12px] border-2 border-border px-3 py-2 text-sm"
+                    >
+                      <FileText className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                        {file.name}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {(file.size / (1024 * 1024)).toFixed(1)} MB
+                      </span>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${file.name}`}
+                        disabled={generating || submitting}
+                        onClick={() => handleRemoveFile(key)}
+                        className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <Button
                 type="button"
                 variant="outline"
                 className="w-full"
-                disabled={generating || submitting}
+                disabled={generating || submitting || files.length >= MAX_FILES}
                 onClick={() => inputRef.current?.click()}
               >
-                <FileUp className="size-4" />
-                {file ? file.name : "Choose lecture file"}
+                {files.length > 0 ? <Plus className="size-4" /> : <FileUp className="size-4" />}
+                {files.length > 0 ? "Add more files" : "Choose lecture files"}
               </Button>
 
               <div className="grid grid-cols-2 gap-3">
@@ -188,10 +282,28 @@ export default function CreateAssignmentPage() {
                 </div>
               </div>
 
+              <div className="flex items-start gap-3 rounded-[12px] border-2 border-border p-3">
+                <Checkbox
+                  id="personalize"
+                  checked={personalize}
+                  disabled={generating || submitting}
+                  onCheckedChange={(checked) => setPersonalize(checked === true)}
+                  className="mt-0.5"
+                />
+                <div className="space-y-0.5">
+                  <Label htmlFor="personalize">Personalize for each student</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Students with weak topics get their own quiz: 60% on those topics, 40% general
+                    coverage. Everyone else gets the standard questions below. Assigning takes
+                    longer.
+                  </p>
+                </div>
+              </div>
+
               <Button
                 type="button"
                 className="w-full"
-                disabled={!file || generating || submitting}
+                disabled={files.length === 0 || generating || submitting}
                 onClick={handleGenerate}
               >
                 {generating ? (
@@ -252,7 +364,7 @@ export default function CreateAssignmentPage() {
                 {submitting ? (
                   <span className="flex items-center gap-2">
                     <Loader2 className="size-4 animate-spin" />
-                    Assigning...
+                    {personalize ? "Personalizing quizzes..." : "Assigning..."}
                   </span>
                 ) : (
                   "Assign to class"
